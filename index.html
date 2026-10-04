@@ -91,6 +91,12 @@
   th { color: var(--muted); font-weight: 500; font-size: 13px; }
   td.num, th.num { text-align: right; }
   [hidden] { display: none !important; }
+  .modal { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; }
+  .modal-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--card); border-bottom: 1px solid var(--line); }
+  .modal-bar b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal-body { flex: 1; overflow: auto; padding: 12px; -webkit-overflow-scrolling: touch; }
+  .modal-body canvas { display: block; width: 100%; max-width: 820px; height: auto; margin: 0 auto 12px; background: #fff;
+                       box-shadow: 0 1px 6px rgba(0,0,0,.25); border-radius: 2px; }
 </style>
 </head>
 <body>
@@ -232,8 +238,7 @@
     <div id="sesRuns" style="margin-top:10px"></div>
     <div id="sesSummary"></div>
     <div class="row" style="margin-top:12px">
-      <button class="primary" id="sesPdf" style="flex:1">Scarica PDF</button>
-      <button id="sesShare" style="flex:1">Condividi</button>
+      <button class="primary" id="sesPdf" style="flex:1">Anteprima PDF</button>
     </div>
     <div class="row" style="margin-top:8px">
       <button id="sesNew" style="flex:1">Nuova sessione</button>
@@ -274,7 +279,7 @@
     <h2>Storico beep test</h2>
     <div id="btHistory"><p class="hint">Nessun test.</p></div>
     <div class="row" style="margin-top:10px">
-      <button id="btPdfAll" style="flex:1">PDF di tutto lo storico</button>
+      <button id="btPdfAll" style="flex:1">Anteprima PDF di tutto lo storico</button>
     </div>
   </section>
 
@@ -357,6 +362,16 @@
     <div class="log" id="log"></div>
   </section>
 </main>
+
+<div id="pdfModal" class="modal" hidden>
+  <div class="modal-bar">
+    <b id="pdfTitle">Anteprima PDF</b>
+    <button class="primary" id="pdfSave">Salva</button>
+    <button id="pdfShare">Condividi</button>
+    <button id="pdfClose" title="Chiudi">✕</button>
+  </div>
+  <div class="modal-body" id="pdfPages"><p class="hint" style="text-align:center">Preparo l'anteprima…</p></div>
+</div>
 
 <script>
 /* ===================== Protocollo chiavetta FitLight ===================== */
@@ -1043,9 +1058,8 @@ function renderBeep() {
   const last = lastBtTest && btTests().find(t => t.id === lastBtTest);
   $('btResult').innerHTML = !beep && last ? '<h3>Risultato</h3><table><tr><th>#</th><th>Atleta</th><th class="num">Livello</th><th class="num">m</th><th class="num">km/h</th><th class="num">VO2*</th></tr>' +
     last.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.athlete)}</td><td class="num"><b>${r.level}-${r.shuttle}</b></td><td class="num">${r.distance}</td><td class="num">${btSpeed(r.level).toFixed(1)}</td><td class="num">${r.vo2}</td></tr>`).join('') +
-    `</table><p class="hint">*VO2max stimato (Léger &amp; Lambert, adulti): indicativo.</p><div class="row"><button class="primary" id="btPdfLast" style="flex:1">Scarica PDF</button>${navigator.share ? '<button id="btShareLast" style="flex:1">Condividi</button>' : ''}</div>` : '';
+    `</table><p class="hint">*VO2max stimato (Léger &amp; Lambert, adulti): indicativo.</p><div class="row"><button class="primary" id="btPdfLast" style="flex:1">Anteprima PDF</button></div>` : '';
   if ($('btPdfLast')) $('btPdfLast').onclick = () => exportBtPdf([last], false);
-  if ($('btShareLast')) $('btShareLast').onclick = () => exportBtPdf([last], true);
   // --- storico per test ---
   const tests = btTests();
   $('btHistory').innerHTML = tests.length ? '<table><tr><th>Test</th><th>Atleti</th><th></th></tr>' + tests.map(t =>
@@ -1108,11 +1122,7 @@ async function exportBtPdf(tests, share) {
     }
     const d = new Date(tests[0].when);
     const fname = (tests.length > 1 ? 'FITLIGHT_Beep_test_storico' : `FITLIGHT_Beep_test_${d.toLocaleDateString('it-IT').replace(/\//g, '-')}_${d.getHours()}h${String(d.getMinutes()).padStart(2, '0')}`) + '.pdf';
-    if (share && navigator.share) {
-      const file = new File([doc.output('blob')], fname, { type: 'application/pdf' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'Beep test' }); return; }
-    }
-    doc.save(fname); log('PDF salvato: ' + fname);
+    await showPdfPreview(doc, fname, tests.length > 1 ? 'Storico beep test' : 'Beep test');
   } catch (e) { if (e.name !== 'AbortError') log('Errore PDF: ' + e.message); }
 }
 
@@ -1346,8 +1356,7 @@ function renderSessions() {
       if (confirm('Eliminare questa corsa?')) { ses.runs.splice(+b.dataset.del, 1); saveSessions(); render(); }
     });
   }
-  $('sesPdf').disabled = $('sesShare').disabled = !runs.length;
-  $('sesShare').hidden = !navigator.share;
+  $('sesPdf').disabled = !runs.length;
   const names = [...new Set([...roster.map(fullName), ...sessions.flatMap(x => x.runs.map(r => r.athlete))].filter(Boolean))];
   const dl = names.map(n => `<option value="${esc(n)}">`).join('');
   if ($('spAthletes').innerHTML !== dl) $('spAthletes').innerHTML = dl;
@@ -1504,19 +1513,60 @@ async function buildPdf(ses) {
   const fname = ('FITLIGHT ' + ses.name).replace(/[^\p{L}\p{N}\- ]+/gu, '-').replace(/\s+/g, '_') + '.pdf';
   return { doc, fname };
 }
+/* ---------- Anteprima PDF (PDF.js disegna le pagine: funziona anche su Android e senza rete) ---------- */
+const PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  return new Promise((res, rej) => {
+    const sc = document.createElement('script'); sc.src = PDFJS_URL;
+    sc.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; res(window.pdfjsLib); };
+    sc.onerror = () => rej(new Error('anteprima non disponibile (serve internet la prima volta)'));
+    document.head.appendChild(sc);
+  });
+}
+let pdfCurrent = null;
+async function showPdfPreview(doc, fname, title) {
+  const blob = doc.output('blob');
+  pdfCurrent = { doc, fname, blob, title };
+  $('pdfTitle').textContent = fname;
+  $('pdfShare').hidden = !(navigator.share && navigator.canShare && navigator.canShare({ files: [new File([blob], fname, { type: 'application/pdf' })] }));
+  $('pdfPages').innerHTML = '<p class="hint" style="text-align:center">Preparo l\'anteprima…</p>';
+  $('pdfModal').hidden = false;
+  document.body.style.overflow = 'hidden';
+  try { history.pushState({ pdf: 1 }, ''); } catch (e) {}
+  try {
+    const pdfjs = await loadPdfJs();
+    const pdf = await pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+    $('pdfPages').innerHTML = '';
+    const width = Math.min(820, $('pdfPages').clientWidth - 24);
+    for (let n = 1; n <= pdf.numPages; n++) {
+      if (!pdfCurrent || pdfCurrent.blob !== blob) return;   // chiusa nel frattempo
+      const page = await pdf.getPage(n);
+      const base = page.getViewport({ scale: 1 });
+      const scale = (width / base.width) * Math.min(2, window.devicePixelRatio || 1);
+      const vp = page.getViewport({ scale });
+      const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+      $('pdfPages').appendChild(c);
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    }
+  } catch (e) {
+    $('pdfPages').innerHTML = `<p class="hint" style="text-align:center">${esc(e.message)}<br>Puoi comunque salvare o condividere il PDF.</p>`;
+  }
+}
+function closePdfPreview(fromHistory) {
+  if ($('pdfModal').hidden) return;
+  $('pdfModal').hidden = true; document.body.style.overflow = '';
+  pdfCurrent = null; $('pdfPages').innerHTML = '';
+  if (!fromHistory) { try { if (history.state && history.state.pdf) history.back(); } catch (e) {} }
+}
+window.addEventListener('popstate', () => closePdfPreview(true));   // tasto "indietro" di Android
+
 async function exportPdf(ses, share) {
   if (!ses || !ses.runs.length) return;
   try {
     const { doc, fname } = await buildPdf(ses);
-    if (share && navigator.share) {
-      const file = new File([doc.output('blob')], fname, { type: 'application/pdf' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: ses.name });
-        return;
-      }
-    }
-    doc.save(fname);
-    log('PDF salvato: ' + fname);
+    await showPdfPreview(doc, fname, ses.name);
   } catch (e) {
     if (e.name !== 'AbortError') log('Errore PDF: ' + e.message);
   }
@@ -1640,7 +1690,15 @@ $('smGo').onclick = () => { if (!busy()) { tone(1, 1); runSimon(); } };
 $('smStop').onclick = () => { if (simon) { simon.stop = true; cancelWaiters(); log('Simon fermato'); } };
 $('sesNew').onclick = () => { if (!sprint) { newSession(); render(); } };
 $('sesPdf').onclick = () => exportPdf(curSession(), false);
-$('sesShare').onclick = () => exportPdf(curSession(), true);
+$('pdfClose').onclick = () => closePdfPreview(false);
+$('pdfSave').onclick = () => { if (!pdfCurrent) return; pdfCurrent.doc.save(pdfCurrent.fname); log('PDF salvato: ' + pdfCurrent.fname); };
+$('pdfShare').onclick = async () => {
+  if (!pdfCurrent) return;
+  try {
+    const file = new File([pdfCurrent.blob], pdfCurrent.fname, { type: 'application/pdf' });
+    await navigator.share({ files: [file], title: pdfCurrent.title });
+  } catch (e) { if (e.name !== 'AbortError') log('Errore condivisione: ' + e.message); }
+};
 
 let lastSprintKey = '';
 function renderSprintSetup() {
