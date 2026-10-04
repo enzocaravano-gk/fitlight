@@ -40,6 +40,18 @@
           background: #2b2f36; transition: background .15s, box-shadow .15s; cursor: pointer; }
   .bulb.active { box-shadow: 0 0 0 4px var(--accent); }
   .light b { display: block; }
+  .meters { display: flex; justify-content: center; gap: 10px; margin-top: 4px; font-size: 12px; color: var(--muted); align-items: center; }
+  .bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; vertical-align: -2px; }
+  .bars i { width: 4px; background: var(--line); border-radius: 1px; display: block; }
+  .bars i.on { background: var(--ok); }
+  .bars.mid i.on { background: #e0a800; }
+  .bars.bad i.on { background: var(--warn); }
+  .batt { display: inline-flex; align-items: center; gap: 3px; }
+  .batt .cell { width: 22px; height: 11px; border: 1.5px solid var(--muted); border-radius: 2px; padding: 1px; position: relative; }
+  .batt .cell::after { content: ''; position: absolute; right: -4px; top: 3px; width: 2px; height: 4px; background: var(--muted); border-radius: 1px; }
+  .batt .fill { height: 100%; border-radius: 1px; background: var(--ok); }
+  .batt.mid .fill { background: #e0a800; }
+  .batt.bad .fill { background: var(--warn); }
   .light small { color: var(--muted); }
   .light label { justify-content: center; margin-top: 6px; color: var(--text); }
   .light input[type=checkbox] { width: 20px; height: 20px; }
@@ -204,7 +216,7 @@ const L_APP = 0, L_NET = 1, L_DONGLE = 2;
 const D_SET_MODE = 1, D_GET_MODE = 7, D_MODE = 8, D_RF_SET_CHANNEL = 17, D_EXIT_BL = 0x90;
 const N_MACFILT_DISABLE = 34, N_CONN_CHANGED = 49, N_GET_CONNECTIONS = 50, N_SET_PAN = 54;
 const A_TX = 65, A_RX = 66, A_TX_BC = 72;
-const OP_STATUS_REQUEST = 1, OP_TRIGGER_RESPONSE = 5, OP_ARM_AND_TRIGGER = 10;
+const OP_STATUS_REQUEST = 1, OP_STATUS_RESPONSE = 2, OP_TRIGGER_RESPONSE = 5, OP_ARM_AND_TRIGGER = 10;
 const OP_SUNFILTER = 6, OP_COLOR_SET = 0xA0, OP_KEEP_ALIVE = 0xA1, OP_LIMITATION = 0xC6;
 const PAN_ID = 0x1234, CHANNEL = 25;
 
@@ -327,7 +339,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const lights = new Map();   // idx -> {mac, macRaw, rssi, color}
 const selected = new Set(); // luci usate negli esercizi
 let results = [], drill = null, modeWaiter = null, triggerWaiters = new Map(), logLines = [];
-let initializing = false, kaIndex = 0, lastPoll = 0;
+let initializing = false, kaIndex = 0, lastPoll = 0, netStart = 0, tick = 0, stIndex = 0;
 let selecting = false, sprint = null;
 
 function log(m) { logLines.unshift(new Date().toLocaleTimeString() + ' ' + m); logLines = logLines.slice(0, 60); render(); }
@@ -340,9 +352,10 @@ function onPacket(p) {
     if (valid && !lights.has(idx)) {
       const macRaw = p.data.slice(6, 14);
       const mac = macRaw.slice().reverse().map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase();
-      lights.set(idx, { mac, macRaw, rssi: null, color: 'off' });
+      lights.set(idx, { mac, macRaw, rssi: null, rxLqi: null, txLqi: null, batt: null, charging: false, fw: null, color: 'off' });
       selected.add(idx);
-      log(`Luce ${idx + 1} collegata (${mac.slice(-6)})`);
+      const dt = netStart ? ` dopo ${((performance.now() - netStart) / 1000).toFixed(1)} s` : '';
+      log(`Luce ${idx + 1} collegata${dt} (${mac.slice(-6)})`);
       welcome(idx);
     } else if (!valid && lights.has(idx)) {
       lights.delete(idx); selected.delete(idx); log(`Luce ${idx + 1} scollegata`);
@@ -354,7 +367,16 @@ function onPacket(p) {
     const d = p.data, n = d[5], o = d.slice(6, 6 + n);
     const op = o[0], idx = o[1], pl = o.slice(4, 4 + o[3]);
     const l = lights.get(idx);
-    if (l && d.length >= 8 + n) l.rssi = d[6 + n];
+    if (l && d.length >= 8 + n) { l.rssi = d[6 + n]; l.rxLqi = d[7 + n]; }
+    if (l && op === OP_STATUS_RESPONSE && pl.length >= 8) {
+      l.txLqi = pl[1];
+      l.charging = (pl[2] & 1) !== 0;
+      l.batt = pl[3] | (pl[4] << 8);
+      l.fw = pl[6] + '.' + pl[7];
+      l.statusAt = Date.now();
+      if (l.batt < 3600 && !l.charging && !l.lowWarned) { l.lowWarned = true; log(`⚠️ Luce ${idx + 1}: batteria bassa (${l.batt} mV)`); }
+      render();
+    }
     if (op === OP_TRIGGER_RESPONSE && pl.length >= 6) {
       const ms = (pl[0] | (pl[1] << 8) | (pl[2] << 16) | (pl[3] << 24));
       const res = { ms, missed: pl[4] !== 0, tRx };
@@ -383,10 +405,18 @@ async function initDongle() {
       setStatus('Avvio chiavetta…');
       expectingReset = true;
       await send(L_DONGLE, D_EXIT_BL);
-      await sleep(2500);
+      await sleep(1500);
       if (dev) { const m2 = await getMode(); if (m2 === 1) await startNetwork(); }
     } else if (mode === 1) {
-      await startNetwork();
+      // Chiavetta già avviata: se ha già luci collegate non rifare la rete (le scollegherebbe)
+      send(L_NET, N_GET_CONNECTIONS);
+      await sleep(700);
+      if (lights.size) {
+        netStart = performance.now();
+        log(`Rete già attiva: ${lights.size} luc${lights.size === 1 ? 'e' : 'i'} ancora collegate`);
+      } else {
+        await startNetwork();
+      }
     } else {
       log('La chiavetta non risponde'); setStatus('La chiavetta non risponde');
     }
@@ -399,6 +429,7 @@ async function startNetwork() {
   await send(L_DONGLE, D_SET_MODE, [1]);
   await sleep(500);
   await send(L_DONGLE, D_RF_SET_CHANNEL, [CHANNEL, 9]);
+  netStart = performance.now();
   log('Rete radio attiva: togli le luci dal caricatore');
   setStatus('Pronta - togli le luci dal caricatore');
 }
@@ -773,11 +804,17 @@ async function exportPdf(ses, share) {
 setInterval(() => {
   if (!dev || initializing) return;
   const now = Date.now();
-  if (now - lastPoll > 4000) { send(L_NET, N_GET_CONNECTIONS); lastPoll = now; }
+  const pollEvery = lights.size ? 4000 : 2000;   // senza luci controlla più spesso
+  if (now - lastPoll > pollEvery) { send(L_NET, N_GET_CONNECTIONS); lastPoll = now; }
   const ids = [...lights.keys()].sort((a, b) => a - b);
   if (ids.length) {
     const idx = ids[kaIndex++ % ids.length];
     send(L_APP, A_TX_BC, octopus(idx, OP_KEEP_ALIVE, lights.get(idx).macRaw, 1));
+    tick++;
+    const racing = sprint && sprint.phase === 'running';
+    if (tick % 3 === 0 && !racing && !(drill && drill.current != null)) {
+      send(L_APP, A_TX, octopus(ids[stIndex++ % ids.length], OP_STATUS_REQUEST));
+    }
   }
   if (lights.size) setStatus(`Collegata - ${lights.size} luc${lights.size === 1 ? 'e' : 'i'}`);
 }, 600);
@@ -796,8 +833,8 @@ let reconnecting = false;
 async function autoReconnect() {
   if (reconnecting || !navigator.usb) return;
   reconnecting = true;
-  for (let i = 0; i < 15 && !dev; i++) {
-    await sleep(1000);
+  for (let i = 0; i < 50 && !dev; i++) {
+    await sleep(300);
     if (dev) break;
     try {
       const d = (await navigator.usb.getDevices()).find(x => x.vendorId === VID);
@@ -892,6 +929,30 @@ function renderSprintSetup() {
 }
 $('spStart').onchange = $('spStop').onchange = e => { e.target.dataset.user = '1'; render(); };
 
+/* Segnale: il peggiore tra come la luce sente la chiavetta e viceversa (LQI 0-255).
+   Soglie dell'app originale: < 90 problemi, < 80 cattivo. */
+function signalInfo(l) {
+  const v = [l.txLqi, l.rxLqi].filter(x => x != null);
+  if (!v.length) return null;
+  const q = Math.min(...v);
+  const bars = q >= 200 ? 4 : q >= 140 ? 3 : q >= 90 ? 2 : 1;
+  return { q, bars, cls: q < 80 ? 'bad' : q < 90 ? 'mid' : '' };
+}
+/* Batteria NiMH in mV. Stima della carica tra 3500 mV (scarica, soglia originale) e 4150 mV (piena). */
+function battInfo(l) {
+  if (l.batt == null) return null;
+  const pct = Math.max(0, Math.min(100, Math.round((l.batt - 3500) / (4150 - 3500) * 100)));
+  return { pct, mv: l.batt, cls: l.batt < 3500 ? 'bad' : l.batt < 3600 ? 'mid' : '' };
+}
+function metersHtml(l) {
+  const s = signalInfo(l), b = battInfo(l);
+  const sig = s ? `<span title="Segnale (LQI ${s.q})" class="bars ${s.cls}">${[1, 2, 3, 4].map(k => `<i class="${k <= s.bars ? 'on' : ''}" style="height:${3 + k * 2.75}px"></i>`).join('')}</span>`
+                : '<span title="Segnale: in attesa">📶 …</span>';
+  const bat = b ? `<span class="batt ${b.cls}" title="${b.mv} mV${l.charging ? ' - in carica' : ''}"><span class="cell"><span class="fill" style="width:${Math.max(6, b.pct)}%"></span></span>${l.charging ? '⚡' : ''}${b.pct}%</span>`
+                : '<span>🔋 …</span>';
+  return `<div class="meters">${sig}${bat}</div>`;
+}
+
 function render() {
   $('status').textContent = statusText;
   $('dot').classList.toggle('on', lights.size > 0);
@@ -907,7 +968,7 @@ function render() {
       : selecting ? (selected.has(idx) ? COLORS.green : COLORS.blue) : COLORS[l.color];
     bulb.onclick = () => { if (!busy()) { setColor(idx, order[(order.indexOf(l.color) + 1) % order.length]); render(); } };
     d.appendChild(bulb);
-    d.insertAdjacentHTML('beforeend', `<b>Luce ${idx + 1}</b><small>${l.mac.slice(-6)}${l.rssi != null ? ' · ' + l.rssi : ''}</small>`);
+    d.insertAdjacentHTML('beforeend', `<b>Luce ${idx + 1}</b>${metersHtml(l)}`);
     const lab = document.createElement('label');
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = selected.has(idx); cb.disabled = busy();
     cb.onchange = () => { if (cb.checked) selected.add(idx); else selected.delete(idx); render(); };
