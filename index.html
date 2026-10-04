@@ -120,24 +120,55 @@
   </div>
 
   <section data-panel="reaction">
-    <h2>Reazione casuale</h2>
-    <div class="row">
-      <label>Tocchi <input id="hits" type="number" min="1" max="200" value="10"></label>
-      <label>Tempo max ms <input id="timeout" type="number" min="500" max="20000" step="500" value="3000"></label>
-      <label>Colore <select id="dcolor"></select></label>
+    <h2>Reazione</h2>
+    <label>Modalità
+      <select id="rMode" data-save>
+        <option value="classic">Classica – una luce alla volta</option>
+        <option value="gonogo">Go / No-Go – tocca o trattieni</option>
+        <option value="choice">Scelta – trova il colore giusto</option>
+        <option value="multi">Multi – spegnile tutte</option>
+      </select>
+    </label>
+    <p class="hint" id="rModeHint"></p>
+    <div class="row" style="margin-top:10px">
+      <label>Durata
+        <select id="rDurType" data-save>
+          <option value="count">Numero di stimoli</option>
+          <option value="time">A tempo</option>
+        </select>
+      </label>
+      <label data-dur="count"><input id="rCount" type="number" min="1" max="500" value="10" data-save> stimoli</label>
+      <label data-dur="time"><input id="rSecs" type="number" min="5" max="600" step="5" value="30" data-save> secondi</label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label>Colore GO <select id="dcolor" data-save></select></label>
+      <label data-modes="gonogo choice">Colore NO-GO <select id="rNogoColor" data-save></select></label>
+      <label data-modes="gonogo">% No-Go <input id="rNogoPct" type="number" min="5" max="80" step="5" value="30" data-save></label>
+      <label data-modes="choice multi">Luci accese <input id="rLit" type="number" min="2" max="32" value="3" data-save></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label>Tempo max ms <input id="timeout" type="number" min="300" max="20000" step="100" value="2000" data-save></label>
       <label>Distanza <select id="rDist" class="distSel" data-def="40"></select></label>
     </div>
     <div class="row" style="margin-top:10px">
-      <button class="primary" id="start">Avvia</button>
-      <button id="stop">Ferma</button>
+      <label>Pausa da <input id="rPMin" type="number" min="0" max="10" step="0.1" value="0.5" data-save style="width:70px"></label>
+      <label>a <input id="rPMax" type="number" min="0" max="10" step="0.1" value="1.5" data-save style="width:70px"> s</label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="start" style="flex:1">Avvia</button>
+      <button id="stop" style="flex:1">Ferma</button>
     </div>
     <p class="hint" id="reactHint"></p>
     <div class="stats">
-      <div class="stat"><b id="sDone">–</b><span>tocchi</span></div>
+      <div class="stat"><b id="sDone">–</b><span id="sDoneLbl">stimoli</span></div>
+      <div class="stat"><b id="sHits">–</b><span>presi</span></div>
       <div class="stat"><b id="sAvg">–</b><span>media ms</span></div>
       <div class="stat"><b id="sBest">–</b><span>migliore ms</span></div>
       <div class="stat"><b id="sMiss">–</b><span>mancati</span></div>
+      <div class="stat" data-modes="gonogo choice"><b id="sErr">–</b><span>errori</span></div>
+      <div class="stat"><b id="sAcc">–</b><span>precisione</span></div>
     </div>
+    <p class="hint" id="rSetInfo"></p>
     <ol id="results"></ol>
   </section>
 
@@ -481,7 +512,11 @@ function armAndWait(idx, name, timeoutMs, opts) {
     let tArm = performance.now();
     const done = res => { clearTimeout(timer); triggerWaiters.delete(idx); resolve(res); };
     const timer = setTimeout(() => done(null), timeoutMs + 2500);
-    triggerWaiters.set(idx, res => done(res ? { ...res, tArm, tEvent: tArm + res.ms } : null));
+    triggerWaiters.set(idx, res => {
+      // risposta "vecchia" di un'accensione precedente: il tempo dichiarato supera quello trascorso
+      if (res && res.ms > performance.now() - tArm + 150) return;
+      done(res ? { ...res, tArm, tEvent: tArm + res.ms } : null);
+    });
     arm(idx, name, timeoutMs, opts).then(t => { tArm = t; });
   });
 }
@@ -517,30 +552,114 @@ function endSelectByTouch() {
 }
 
 /* ---------- Reazione casuale ---------- */
-async function runDrill(hits, timeoutMs, color) {
+const MODE_HINTS = {
+  classic: 'Si accende una luce alla volta: toccala il più in fretta possibile.',
+  gonogo: 'Colore GO = tocca. Colore NO-GO = NON toccare e aspetta che si spenga. Allena reazione e controllo.',
+  choice: 'Si accendono più luci insieme: tocca solo quella con il colore GO, le altre sono trappole.',
+  multi: 'Si accendono più luci insieme: spegnile tutte il più in fretta possibile.',
+};
+function reactSettings() {
+  return {
+    mode: $('rMode').value, durType: $('rDurType').value,
+    count: Math.max(1, +$('rCount').value || 10), secs: Math.max(5, +$('rSecs').value || 30),
+    timeoutMs: Math.max(300, +$('timeout').value || 2000),
+    go: $('dcolor').value, nogo: $('rNogoColor').value,
+    nogoPct: Math.min(80, Math.max(5, +$('rNogoPct').value || 30)),
+    lit: Math.max(2, +$('rLit').value || 3),
+    pMin: Math.max(0, +$('rPMin').value || 0), pMax: Math.max(0, +$('rPMax').value || 0),
+    distance: $('rDist').value,
+  };
+}
+const pickOne = (ids, avoid) => { const c = ids.length > 1 ? ids.filter(i => i !== avoid) : ids; return c[Math.floor(Math.random() * c.length)]; };
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+async function runDrill(cfg) {
   const pool = activeLights();
   if (!pool.length) return;
-  drill = { hits, done: 0, stop: false, current: null };
+  if (cfg.mode === 'choice' && pool.length < 2) return log('La modalità Scelta richiede almeno 2 luci');
+  if (cfg.mode === 'multi' && pool.length < 2) return log('La modalità Multi richiede almeno 2 luci');
+  if (cfg.go === cfg.nogo && (cfg.mode === 'gonogo' || cfg.mode === 'choice')) return log('Colore GO e NO-GO devono essere diversi');
+  drill = { cfg, done: 0, stop: false, lit: new Map(), endAt: cfg.durType === 'time' ? performance.now() + cfg.secs * 1000 : null, sets: [] };
   results = [];
-  log(`Reazione avviata: ${hits} tocchi su luci ${pool.map(i => i + 1).join(', ')}`);
+  const opts = { distance: cfg.distance };
+  const ticker = drill.endAt ? setInterval(render, 250) : null;
+  log(`Reazione ${$('rMode').selectedOptions[0].text.split(' –')[0]} avviata su luci ${pool.map(i => i + 1).join(', ')}`);
+  const timeUp = () => drill.endAt && performance.now() >= drill.endAt;
   let prev = null;
-  for (let n = 0; n < hits; n++) {
+
+  const goStim = async (idx) => {
+    drill.lit.set(idx, cfg.go); render();
+    const r = await armAndWait(idx, cfg.go, cfg.timeoutMs, opts);
+    drill.lit.delete(idx);
+    if (drill.stop) return null;
+    results.push(r && !r.missed ? { light: idx + 1, kind: 'hit', ms: r.ms } : { light: idx + 1, kind: 'miss' });
+    return r && !r.missed ? r.ms : null;
+  };
+  const nogoStim = async (idx) => {
+    drill.lit.set(idx, cfg.nogo); render();
+    const r = await armAndWait(idx, cfg.nogo, cfg.timeoutMs, { ...opts, beep: false });
+    drill.lit.delete(idx);
+    if (drill.stop) return;
+    if (r && !r.missed) { results.push({ light: idx + 1, kind: 'nogo_err', ms: r.ms }); log(`✗ Luce ${idx + 1}: toccato il NO-GO`); }
+    else results.push({ light: idx + 1, kind: 'nogo_ok' });
+  };
+
+  while (!drill.stop) {
+    if (!drill.endAt && drill.done >= cfg.count) break;
+    if (timeUp()) break;
+    await sleep((cfg.pMin + Math.random() * Math.max(0, cfg.pMax - cfg.pMin)) * 1000);
+    if (drill.stop || timeUp()) break;
     const ids = activeLights();
-    if (drill.stop || !ids.length) break;
-    await sleep(500 + Math.random() * 1000);
+    if (!ids.length) break;
+
+    if (cfg.mode === 'classic') {
+      prev = pickOne(ids, prev); await goStim(prev);
+    } else if (cfg.mode === 'gonogo') {
+      prev = pickOne(ids, prev);
+      if (Math.random() * 100 < cfg.nogoPct) await nogoStim(prev); else await goStim(prev);
+    } else if (cfg.mode === 'choice') {
+      const target = pickOne(ids, prev); prev = target;
+      const traps = shuffle(ids.filter(i => i !== target)).slice(0, Math.min(cfg.lit, ids.length) - 1);
+      let targetDone = false;
+      const trapWaits = traps.map(t => {
+        drill.lit.set(t, cfg.nogo);
+        return armAndWait(t, cfg.nogo, cfg.timeoutMs, { ...opts, beep: false }).then(r => {
+          if (r && !r.missed && !targetDone && !drill.stop) { results.push({ light: t + 1, kind: 'err', ms: r.ms }); log(`✗ Luce ${t + 1}: toccata la trappola`); render(); }
+        });
+      });
+      await goStim(target);
+      targetDone = true;
+      cancelWaiters(traps);
+      for (const t of traps) { drill.lit.delete(t); setColor(t, 'off'); }
+      await Promise.all(trapWaits);
+    } else if (cfg.mode === 'multi') {
+      const group = shuffle(ids).slice(0, Math.min(cfg.lit, ids.length));
+      const times = await Promise.all(group.map(i => goStim(i)));
+      if (!drill.stop && times.every(t => t != null)) drill.sets.push(Math.max(...times));
+    }
     if (drill.stop) break;
-    const choices = ids.length > 1 ? ids.filter(i => i !== prev) : ids;
-    const idx = choices[Math.floor(Math.random() * choices.length)];
-    prev = idx; drill.current = idx; render();
-    const r = await armAndWait(idx, color, timeoutMs, { distance: $('rDist').value });
-    drill.current = null;
-    if (drill.stop) break;
-    results.push({ light: idx + 1, ms: r && !r.missed ? r.ms : null });
-    drill.done = n + 1; render();
+    drill.done++; lastDone = drill.done; lastSets = drill.sets; render();
   }
-  const ok = results.filter(x => x.ms != null).map(x => x.ms);
-  log(ok.length ? `Fine: ${ok.length}/${results.length} presi, media ${Math.round(ok.reduce((a, b) => a + b, 0) / ok.length)} ms, migliore ${Math.min(...ok)} ms` : 'Esercizio terminato');
+  if (ticker) clearInterval(ticker);
+  const st = reactStats();
+  log(st.hits ? `Fine: ${st.hits} presi, media ${st.avg} ms, migliore ${st.best} ms, mancati ${st.miss}` +
+      (st.errors ? `, errori ${st.errors}` : '') + `, precisione ${st.acc}%` : 'Esercizio terminato');
+  for (const i of drill.lit.keys()) setColor(i, 'off');
+  lastSets = drill.sets; lastDone = drill.done;
   drill = null; render();
+}
+function reactStats() {
+  const hitsMs = results.filter(x => x.kind === 'hit').map(x => x.ms);
+  const miss = results.filter(x => x.kind === 'miss').length;
+  const errors = results.filter(x => x.kind === 'nogo_err' || x.kind === 'err').length;
+  const nogoOk = results.filter(x => x.kind === 'nogo_ok').length;
+  const decisions = hitsMs.length + miss + nogoOk + results.filter(x => x.kind === 'nogo_err').length + results.filter(x => x.kind === 'err').length;
+  return {
+    hits: hitsMs.length, miss, errors, nogoOk,
+    avg: hitsMs.length ? Math.round(hitsMs.reduce((a, b) => a + b, 0) / hitsMs.length) : null,
+    best: hitsMs.length ? Math.min(...hitsMs) : null,
+    acc: decisions ? Math.round((hitsMs.length + nogoOk) / decisions * 100) : null,
+  };
 }
 function stopDrill() {
   if (!drill) return;
@@ -812,7 +931,7 @@ setInterval(() => {
     send(L_APP, A_TX_BC, octopus(idx, OP_KEEP_ALIVE, lights.get(idx).macRaw, 1));
     tick++;
     const racing = sprint && sprint.phase === 'running';
-    if (tick % 3 === 0 && !racing && !(drill && drill.current != null)) {
+    if (tick % 3 === 0 && !racing && !(drill && drill.lit.size)) {
       send(L_APP, A_TX, octopus(ids[stIndex++ % ids.length], OP_STATUS_REQUEST));
     }
   }
@@ -878,7 +997,12 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('sel', x === b));
   document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
 });
-$('start').onclick = () => { if (!busy() && activeLights().length) runDrill(+$('hits').value, +$('timeout').value, $('dcolor').value); };
+$('start').onclick = () => { if (!busy() && activeLights().length) { lastSets = []; runDrill(reactSettings()); } };
+for (const k of Object.keys(COLORS)) if (k !== 'off') $('rNogoColor').add(new Option(NAMES[k], k, false, k === 'red'));
+document.querySelectorAll('[data-save]').forEach(el => {
+  try { const v = localStorage.getItem('fitlight_set_' + el.id); if (v != null) el.value = v; } catch (e) {}
+  el.addEventListener('change', () => { try { localStorage.setItem('fitlight_set_' + el.id, el.value); } catch (e) {} render(); });
+});
 $('stop').onclick = stopDrill;
 $('selAll').onclick = () => { if (!busy()) { for (const i of lights.keys()) selected.add(i); render(); } };
 $('selNone').onclick = () => { if (!busy()) { selected.clear(); render(); } };
@@ -953,18 +1077,43 @@ function metersHtml(l) {
   return `<div class="meters">${sig}${bat}</div>`;
 }
 
+const KIND_TXT = { hit: x => `${x.ms} ms`, miss: () => 'mancato', nogo_ok: () => 'NO-GO evitato ✓', nogo_err: x => `NO-GO toccato ✗ (${x.ms} ms)`, err: x => `trappola toccata ✗ (${x.ms} ms)` };
+function renderReaction() {
+  const mode = $('rMode').value, dur = $('rDurType').value;
+  $('rModeHint').textContent = MODE_HINTS[mode];
+  document.querySelectorAll('[data-modes]').forEach(el => el.hidden = !el.dataset.modes.split(' ').includes(mode));
+  document.querySelectorAll('[data-dur]').forEach(el => el.hidden = el.dataset.dur !== dur);
+  document.querySelectorAll('[data-panel="reaction"] input, [data-panel="reaction"] select').forEach(el => el.disabled = !!drill);
+  const st = reactStats();
+  if (drill && drill.endAt) {
+    $('sDone').textContent = Math.max(0, Math.ceil((drill.endAt - performance.now()) / 1000)) + ' s'; $('sDoneLbl').textContent = 'rimasti';
+  } else {
+    $('sDone').textContent = drill ? `${drill.done}/${drill.cfg.count}` : (results.length ? lastDone : '–');
+    $('sDoneLbl').textContent = 'stimoli';
+  }
+  $('sHits').textContent = results.length ? st.hits : '–';
+  $('sAvg').textContent = st.avg ?? '–';
+  $('sBest').textContent = st.best ?? '–';
+  $('sMiss').textContent = results.length ? st.miss : '–';
+  $('sErr').textContent = results.length ? st.errors : '–';
+  $('sAcc').textContent = st.acc != null ? st.acc + '%' : '–';
+  $('rSetInfo').textContent = (mode === 'multi' && lastSets.length ? `Multi: tempo medio per spegnere tutto il gruppo ${Math.round(lastSets.reduce((a, b) => a + b, 0) / lastSets.length)} ms, migliore ${Math.min(...lastSets)} ms` : '');
+  $('results').innerHTML = results.map(x => `<li>Luce ${x.light}: ${KIND_TXT[x.kind](x)}</li>`).join('');
+}
+let lastSets = [], lastDone = 0;
+
 function render() {
   $('status').textContent = statusText;
   $('dot').classList.toggle('on', lights.size > 0);
   $('connectBox').hidden = !!dev;
-  const cur = drill ? drill.current : null;
+  const litMap = drill ? drill.lit : new Map();
   const box = $('lights');
   box.innerHTML = lights.size ? '' : `<div class="empty">${dev ? 'Togli le luci dal caricatore: compariranno qui.' : 'Collega la chiavetta.'}</div>`;
   for (const [idx, l] of [...lights.entries()].sort((a, b) => a[0] - b[0])) {
     const d = document.createElement('div'); d.className = 'light' + (selected.has(idx) ? '' : ' unused');
     const bulb = document.createElement('div');
-    bulb.className = 'bulb' + (cur === idx ? ' active' : '');
-    bulb.style.background = cur === idx ? COLORS[$('dcolor').value]
+    bulb.className = 'bulb' + (litMap.has(idx) ? ' active' : '');
+    bulb.style.background = litMap.has(idx) ? COLORS[litMap.get(idx)]
       : selecting ? (selected.has(idx) ? COLORS.green : COLORS.blue) : COLORS[l.color];
     bulb.onclick = () => { if (!busy()) { setColor(idx, order[(order.indexOf(l.color) + 1) % order.length]); render(); } };
     d.appendChild(bulb);
@@ -989,12 +1138,7 @@ function render() {
   $('start').disabled = busy() || !activeLights().length;
   $('stop').disabled = !drill;
   $('reactHint').textContent = lights.size && !activeLights().length ? 'Nessuna luce scelta.' : '';
-  const ok = results.filter(x => x.ms != null).map(x => x.ms);
-  $('sDone').textContent = drill ? `${drill.done}/${drill.hits}` : (results.length || '–');
-  $('sAvg').textContent = ok.length ? Math.round(ok.reduce((a, b) => a + b, 0) / ok.length) : '–';
-  $('sBest').textContent = ok.length ? Math.min(...ok) : '–';
-  $('sMiss').textContent = results.length ? results.length - ok.length : '–';
-  $('results').innerHTML = results.map(x => `<li>Luce ${x.light}: ${x.ms != null ? x.ms + ' ms' : 'mancato'}</li>`).join('');
+  renderReaction();
   renderSprintSetup();
   renderSessions();
   $('log').textContent = logLines.join('\n');
