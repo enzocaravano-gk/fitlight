@@ -238,7 +238,7 @@ function octopus(idx, op, payload = [], proclayer = 0) {
 }
 
 /* ===================== USB (CDC su WebUSB) ===================== */
-let dev = null, epIn = 0, epOut = 0, rxBuf = [], txQueue = Promise.resolve();
+let dev = null, epIn = 0, epOut = 0, rxBuf = [], txQueue = Promise.resolve(), expectingReset = false;
 
 async function openDevice(d) {
   await d.open();
@@ -276,7 +276,10 @@ async function readLoop(d) {
         parseRx();
       }
     } catch (e) {
-      if (dev === d) { log('Lettura USB interrotta: ' + e.message); onDisconnect(); }
+      if (dev === d) {
+        log(expectingReset ? 'La chiavetta si sta riavviando…' : 'Collegamento USB interrotto (' + e.message + ')');
+        onDisconnect();
+      }
       return;
     }
   }
@@ -358,6 +361,7 @@ async function initDongle() {
     if (mode === 0) {
       log('Chiavetta in bootloader: avvio applicazione…');
       setStatus('Avvio chiavetta…');
+      expectingReset = true;
       await send(L_DONGLE, D_EXIT_BL);
       await sleep(2500);
       if (dev) { const m2 = await getMode(); if (m2 === 1) await startNetwork(); }
@@ -588,7 +592,24 @@ async function keepScreenOn() { try { wakeLock = await navigator.wakeLock.reques
 function onDisconnect() {
   dev = null; lights.clear(); selected.clear(); cancelWaiters();
   selecting = false; if (drill) drill.stop = true; if (sprint) sprint.stop = true;
-  setStatus('Chiavetta scollegata'); render();
+  setStatus(expectingReset ? 'Riavvio chiavetta…' : 'Chiavetta scollegata'); render();
+  autoReconnect();
+}
+/* Dopo un riavvio la chiavetta ricompare: riprova ad aprirla per 15 secondi */
+let reconnecting = false;
+async function autoReconnect() {
+  if (reconnecting || !navigator.usb) return;
+  reconnecting = true;
+  for (let i = 0; i < 15 && !dev; i++) {
+    await sleep(1000);
+    if (dev) break;
+    try {
+      const d = (await navigator.usb.getDevices()).find(x => x.vendorId === VID);
+      if (d && !dev) { await connectFlow(d); }
+    } catch (e) {}
+  }
+  reconnecting = false;
+  if (!dev) setStatus('Chiavetta scollegata');
 }
 
 /* ===================== Interfaccia ===================== */
@@ -719,8 +740,11 @@ function render() {
 }
 
 async function connectFlow(d) {
+  if (dev || connecting) return;
+  connecting = true;
   try {
     await openDevice(d);
+    expectingReset = false;
     setStatus('Chiavetta collegata');
     log('Chiavetta collegata');
     keepScreenOn();
@@ -728,8 +752,11 @@ async function connectFlow(d) {
   } catch (e) {
     log('Errore apertura chiavetta: ' + e.message);
     setStatus('Errore: ' + e.message);
-  }
+    try { await d.close(); } catch (e2) {}
+    dev = null;
+  } finally { connecting = false; }
 }
+let connecting = false;
 
 if (!navigator.usb) {
   $('nousb').hidden = false; $('connectBox').hidden = true;
