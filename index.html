@@ -195,8 +195,11 @@
     </div>
     <p class="hint" id="spReflHint" hidden>Riflettore: metti un catarifrangente davanti a ogni luce; scatta quando il corpo interrompe il fascio, come una fotocellula.</p>
     <div class="row" style="margin-top:12px">
-      <label style="flex:1">Atleta <input id="spAthlete" list="spAthletes" placeholder="facoltativo" style="flex:1;min-width:0"></label>
+      <label style="flex:1">Atleta <select id="spAthlete" style="flex:1;min-width:0"></select></label>
       <datalist id="spAthletes"></datalist>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <label><input type="checkbox" id="spAutoNext" style="width:20px;height:20px"> Dopo ogni corsa passa all'atleta successivo</label>
     </div>
     <div class="timer" id="spTimer">0.00</div>
     <div class="phase" id="spPhase">Scegli le luci e premi Pronti</div>
@@ -205,6 +208,22 @@
       <button id="spCancel" style="flex:1">Annulla</button>
     </div>
     <div id="spLast"></div>
+  </section>
+
+  <section data-panel="sprint" hidden>
+    <h2>Elenco atleti <span class="hint" id="rosterCount"></span></h2>
+    <div id="rosterList"></div>
+    <div class="row" style="margin-top:10px">
+      <input id="rsCognome" placeholder="Cognome" style="flex:1;min-width:0">
+      <input id="rsNome" placeholder="Nome" style="flex:1;min-width:0">
+      <button class="primary" id="rsAdd">Aggiungi</button>
+    </div>
+    <details style="margin-top:12px">
+      <summary class="hint" style="cursor:pointer">Aggiungi più atleti insieme</summary>
+      <p class="hint">Uno per riga, nel formato <b>Cognome, Nome</b> (es. "De Rossi, Marco"). Senza virgola l'ultima parola è il nome.</p>
+      <textarea id="rsBulk" rows="5" style="width:100%;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)"></textarea>
+      <div class="row" style="margin-top:6px"><button id="rsBulkAdd">Aggiungi elenco</button></div>
+    </details>
   </section>
 
   <section data-panel="sprint" hidden>
@@ -1274,10 +1293,15 @@ async function runSprint() {
   await sleep(50);
   const total = rs.tEvent - sprint.t0;
   const splits = sprint.splits.filter(s => !s.isStop).sort((a, b) => a.t - b.t);
-  const run = { athlete: $('spAthlete').value.trim(), when: new Date().toISOString(), total,
+  const ath = roster.find(a => a.id === $('spAthlete').value);
+  const run = { athlete: ath ? fullName(ath) : '', athleteId: ath ? ath.id : null, when: new Date().toISOString(), total,
                 splits: splits.map(s => ({ light: s.light, t: s.t })), missedMids: mids.length - splits.length,
                 course: { start: startIdx + 1, stop: stopIdx + 1, mids: mids.map(i => i + 1), distance: opts.distance } };
   curSession().runs.push(run); saveSessions();
+  if (ath && $('spAutoNext').checked && roster.length > 1) {
+    const i = roster.indexOf(ath); $('spAthlete').value = roster[(i + 1) % roster.length].id;
+    log(`Prossimo atleta: ${fullName(roster[(i + 1) % roster.length])}`);
+  }
   log(`Sprint: ${fmt(total)} s`);
   endSprint(run);
 }
@@ -1324,7 +1348,7 @@ function renderSessions() {
   }
   $('sesPdf').disabled = $('sesShare').disabled = !runs.length;
   $('sesShare').hidden = !navigator.share;
-  const names = [...new Set(sessions.flatMap(x => x.runs.map(r => r.athlete)).filter(Boolean))];
+  const names = [...new Set([...roster.map(fullName), ...sessions.flatMap(x => x.runs.map(r => r.athlete))].filter(Boolean))];
   const dl = names.map(n => `<option value="${esc(n)}">`).join('');
   if ($('spAthletes').innerHTML !== dl) $('spAthletes').innerHTML = dl;
 
@@ -1339,6 +1363,54 @@ function renderSessions() {
   $('sesArchive').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
     if (confirm('Eliminare questa sessione e tutte le sue corse?')) { sessions = sessions.filter(x => x.id !== b.dataset.rm); saveSessions(); render(); }
   });
+}
+
+/* ---------- Elenco atleti (anagrafica condivisa da sprint e beep test) ---------- */
+let roster = [];
+try { roster = JSON.parse(localStorage.getItem('fitlight_roster') || '[]'); } catch (e) {}
+const saveRoster = () => { try { localStorage.setItem('fitlight_roster', JSON.stringify(roster)); } catch (e) {} };
+const fullName = a => `${a.cognome} ${a.nome}`.trim();
+const sortRoster = () => roster.sort((a, b) => a.cognome.localeCompare(b.cognome, 'it') || a.nome.localeCompare(b.nome, 'it'));
+const cap = t => t.trim().replace(/\s+/g, ' ').replace(/(^|[\s'-])(\p{L})/gu, (m, p, c) => p + c.toUpperCase());
+function addAthlete(cognome, nome) {
+  cognome = cap(cognome || ''); nome = cap(nome || '');
+  if (!cognome && !nome) return null;
+  const dup = roster.find(a => a.cognome.toLowerCase() === cognome.toLowerCase() && a.nome.toLowerCase() === nome.toLowerCase());
+  if (dup) return dup;
+  const a = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), cognome, nome };
+  roster.push(a); sortRoster(); saveRoster();
+  return a;
+}
+function parseAthleteLine(line) {
+  line = line.trim(); if (!line) return null;
+  if (line.includes(',') || line.includes(';') || line.includes('\t')) { const [c, ...n] = line.split(/[,;\t]/); return [c, n.join(' ')]; }
+  const w = line.split(/\s+/); if (w.length === 1) return [w[0], ''];
+  return [w.slice(0, -1).join(' '), w[w.length - 1]];
+}
+function renderRoster() {
+  $('rosterCount').textContent = roster.length ? `(${roster.length})` : '';
+  const html = roster.length ? '<table><tr><th>Cognome</th><th>Nome</th><th class="num">Corse</th><th></th></tr>' + roster.map(a => {
+    const n = sessions.reduce((k, x) => k + x.runs.filter(r => r.athleteId === a.id).length, 0);
+    return `<tr><td><input data-ra="${a.id}" data-f="cognome" value="${esc(a.cognome)}" style="width:100%;min-width:0"></td>` +
+      `<td><input data-ra="${a.id}" data-f="nome" value="${esc(a.nome)}" style="width:100%;min-width:0"></td>` +
+      `<td class="num">${n}</td><td class="num"><button data-rrm="${a.id}" style="padding:2px 9px">×</button></td></tr>`;
+  }).join('') + '</table>' : '<p class="hint">Nessun atleta. Aggiungili qui sotto: li ritrovi nello sprint e nel beep test.</p>';
+  if (document.activeElement?.dataset?.ra == null && $('rosterList').innerHTML !== html) {
+    $('rosterList').innerHTML = html;
+    $('rosterList').querySelectorAll('[data-ra]').forEach(el => el.onchange = () => {
+      const a = roster.find(x => x.id === el.dataset.ra); if (!a) return;
+      a[el.dataset.f] = cap(el.value); sortRoster(); saveRoster(); render();
+    });
+    $('rosterList').querySelectorAll('[data-rrm]').forEach(b => b.onclick = () => {
+      const a = roster.find(x => x.id === b.dataset.rrm);
+      if (a && confirm(`Togliere ${fullName(a)} dall'elenco? Le corse già registrate restano.`)) { roster = roster.filter(x => x !== a); saveRoster(); render(); }
+    });
+  }
+  // menu atleta dello sprint
+  const sel = $('spAthlete'), keep = sel.value;
+  const opts = '<option value="">— senza nome —</option>' + roster.map(a => `<option value="${a.id}">${esc(fullName(a))}</option>`).join('');
+  if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; sel.value = roster.some(a => a.id === keep) ? keep : ''; }
+  sel.disabled = !!sprint;
 }
 
 /* ---------- PDF (jsPDF, salvato in cache per l'uso offline) ---------- */
@@ -1545,6 +1617,18 @@ $('spGo').onclick = () => { if (!busy()) runSprint(); };
 $('spCancel').onclick = () => { if (sprint) { sprint.stop = true; cancelWaiters(); log('Sprint annullato'); } };
 $('sesName').oninput = () => { curSession().name = $('sesName').value || 'Sessione'; saveSessions(); };
 $('sesName').onchange = () => render();
+$('rsAdd').onclick = () => {
+  const a = addAthlete($('rsCognome').value, $('rsNome').value);
+  if (a) { $('rsCognome').value = ''; $('rsNome').value = ''; $('rsCognome').focus(); log(`Atleta aggiunto: ${fullName(a)}`); render(); }
+};
+$('rsNome').onkeydown = e => { if (e.key === 'Enter') $('rsAdd').click(); };
+$('rsBulkAdd').onclick = () => {
+  let n = 0;
+  for (const line of $('rsBulk').value.split('\n')) { const p = parseAthleteLine(line); if (p && addAthlete(p[0], p[1])) n++; }
+  $('rsBulk').value = ''; log(`Aggiunti ${n} atleti all'elenco`); render();
+};
+try { $('spAutoNext').checked = localStorage.getItem('fitlight_set_spAutoNext') === '1'; } catch (e) {}
+$('spAutoNext').onchange = () => { try { localStorage.setItem('fitlight_set_spAutoNext', $('spAutoNext').checked ? '1' : '0'); } catch (e) {} };
 $('sndTest').onclick = () => { tone(800, 120); tone(800, 120, 0.5); tone(1200, 350, 1.0); };
 try { const v = localStorage.getItem('fitlight_set_sndOn'); if (v != null) $('sndOn').checked = v === '1'; } catch (e) {}
 $('sndOn').onchange = () => { try { localStorage.setItem('fitlight_set_sndOn', $('sndOn').checked ? '1' : '0'); } catch (e) {} };
@@ -1684,6 +1768,7 @@ function render() {
   renderReaction();
   renderSprintSetup();
   renderSessions();
+  renderRoster();
   renderBeep();
   renderSimon();
   $('log').textContent = logLines.join('\n');
