@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FITLIGHT</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#111317">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #16181d; --muted: #6b7280; --line: #e3e5e9;
+    --accent: #0a84ff; --ok: #1f9d55; --warn: #c2410c; --soft: #eef4ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --card: #1b1e24; --text: #eef0f3; --muted: #9aa1ac; --line: #2a2e36;
+            --accent: #3d9bff; --ok: #34c77b; --warn: #f08a4b; --soft: #1a2433; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px 16px 48px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  h3 { font-size: 15px; margin: 14px 0 8px; }
+  .pill { padding: 6px 12px; border-radius: 999px; background: var(--card); border: 1px solid var(--line);
+          font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); }
+  .dot.on { background: var(--ok); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 6px 0; }
+  .tabs button { flex: 1; }
+  .tabs button.sel { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .lights { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  .light { border: 1px solid var(--line); border-radius: 12px; padding: 10px; text-align: center; }
+  .light.unused { opacity: .45; }
+  .bulb { width: 58px; height: 58px; border-radius: 50%; margin: 4px auto 8px; border: 3px solid var(--line);
+          background: #2b2f36; transition: background .15s, box-shadow .15s; cursor: pointer; }
+  .bulb.active { box-shadow: 0 0 0 4px var(--accent); }
+  .light b { display: block; }
+  .light small { color: var(--muted); }
+  .light label { justify-content: center; margin-top: 6px; color: var(--text); }
+  .light input[type=checkbox] { width: 20px; height: 20px; }
+  .empty { color: var(--muted); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .hint { color: var(--muted); font-size: 14px; margin: 8px 0 0; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+           border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .45; }
+  .big { width: 100%; padding: 14px; font-size: 17px; }
+  .sw { width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 2px solid var(--line); }
+  label { font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  input, select { font: inherit; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line);
+                  background: var(--bg); color: var(--text); }
+  input[type=number] { width: 90px; }
+  .stats { display: flex; gap: 22px; margin: 14px 0 6px; flex-wrap: wrap; }
+  .stat b { font-size: 26px; display: block; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  ol, ul { margin: 6px 0 0; padding-left: 22px; font-variant-numeric: tabular-nums; }
+  .log { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted); max-height: 200px; overflow: auto; white-space: pre-wrap; }
+  .warnbox { border-color: var(--warn); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border-radius: 999px; padding: 6px 12px; }
+  .chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .timer { font-size: 56px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; margin: 10px 0 2px; }
+  .phase { text-align: center; color: var(--muted); margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  td.num, th.num { text-align: right; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>FITLIGHT</h1>
+    <div class="pill"><span class="dot" id="dot"></span><span id="status">Chiavetta non collegata</span></div>
+  </header>
+
+  <section id="nousb" class="warnbox" hidden>
+    <b>WebUSB non disponibile.</b>
+    <p id="nousbMsg" style="margin:6px 0 0"></p>
+  </section>
+
+  <section id="connectBox">
+    <button class="primary big" id="connect">Collega chiavetta USB</button>
+  </section>
+
+  <section>
+    <h2>Luci</h2>
+    <div class="lights" id="lights"><div class="empty">Collega la chiavetta, poi togli le luci dal caricatore.</div></div>
+    <div class="row" style="margin-top:12px">
+      <button id="selAll">Tutte</button>
+      <button id="selNone">Nessuna</button>
+      <button id="selTouch">Scegli toccando</button>
+    </div>
+    <p class="hint" id="selHint">Le luci spuntate sono quelle usate negli esercizi.</p>
+  </section>
+
+  <div class="tabs">
+    <button data-tab="reaction" class="sel">Reazione</button>
+    <button data-tab="sprint">Sprint</button>
+    <button data-tab="tools">Strumenti</button>
+  </div>
+
+  <section data-panel="reaction">
+    <h2>Reazione casuale</h2>
+    <div class="row">
+      <label>Tocchi <input id="hits" type="number" min="1" max="200" value="10"></label>
+      <label>Tempo max ms <input id="timeout" type="number" min="500" max="20000" step="500" value="3000"></label>
+      <label>Colore <select id="dcolor"></select></label>
+      <label>Distanza <select id="rDist" class="distSel" data-def="40"></select></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="start">Avvia</button>
+      <button id="stop">Ferma</button>
+    </div>
+    <p class="hint" id="reactHint"></p>
+    <div class="stats">
+      <div class="stat"><b id="sDone">–</b><span>tocchi</span></div>
+      <div class="stat"><b id="sAvg">–</b><span>media ms</span></div>
+      <div class="stat"><b id="sBest">–</b><span>migliore ms</span></div>
+      <div class="stat"><b id="sMiss">–</b><span>mancati</span></div>
+    </div>
+    <ol id="results"></ol>
+  </section>
+
+  <section data-panel="sprint" hidden>
+    <h2>Sprint – cronometro</h2>
+    <div class="row">
+      <label>Start <select id="spStart"></select></label>
+      <label>Stop <select id="spStop"></select></label>
+    </div>
+    <h3>Intermedi (nell'ordine in cui li tocchi)</h3>
+    <div class="chips" id="spMids"></div>
+    <div class="row" style="margin-top:12px">
+      <label>Distanza <select id="spSens" class="distSel" data-def="75" data-refl="1"></select></label>
+      <label><input type="checkbox" id="spBeep" checked style="width:20px;height:20px"> Beep</label>
+    </div>
+    <p class="hint" id="spReflHint" hidden>Riflettore: metti un catarifrangente davanti a ogni luce; scatta quando il corpo interrompe il fascio, come una fotocellula.</p>
+    <div class="timer" id="spTimer">0.00</div>
+    <div class="phase" id="spPhase">Scegli le luci e premi Pronti</div>
+    <div class="row">
+      <button class="primary" id="spGo" style="flex:1">Pronti</button>
+      <button id="spCancel" style="flex:1">Annulla</button>
+    </div>
+    <div id="spLast"></div>
+    <h3>Storico</h3>
+    <div id="spHistory"><p class="hint">Nessuna prova.</p></div>
+    <div class="row" style="margin-top:10px"><button id="spClear">Cancella storico</button></div>
+  </section>
+
+  <section data-panel="tools" hidden>
+    <h2>Colore alle luci scelte</h2>
+    <div class="row" id="swatches"></div>
+    <h3>Filtro sole (all'aperto)</h3>
+    <div class="row">
+      <select id="sunSel">
+        <option value="0">Nessun sole</option>
+        <option value="1">Sole livello 1</option>
+        <option value="2">Sole livello 2</option>
+        <option value="3">Sole livello 3</option>
+        <option value="4">Sole livello 4</option>
+      </select>
+      <button id="sunApply">Applica a tutte</button>
+    </div>
+    <p class="hint">Aumentalo se al sole le luci scattano da sole. Viene applicato anche alle luci che si collegano dopo.</p>
+  </section>
+
+  <section>
+    <h2>Registro</h2>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<script>
+/* ===================== Protocollo chiavetta FitLight ===================== */
+const VID = 0x04D8, PID = 0x000A;
+const L_APP = 0, L_NET = 1, L_DONGLE = 2;
+const D_SET_MODE = 1, D_GET_MODE = 7, D_MODE = 8, D_RF_SET_CHANNEL = 17, D_EXIT_BL = 0x90;
+const N_MACFILT_DISABLE = 34, N_CONN_CHANGED = 49, N_GET_CONNECTIONS = 50, N_SET_PAN = 54;
+const A_TX = 65, A_RX = 66, A_TX_BC = 72;
+const OP_STATUS_REQUEST = 1, OP_TRIGGER_RESPONSE = 5, OP_ARM_AND_TRIGGER = 10;
+const OP_SUNFILTER = 6, OP_COLOR_SET = 0xA0, OP_KEEP_ALIVE = 0xA1, OP_LIMITATION = 0xC6;
+const PAN_ID = 0x1234, CHANNEL = 25;
+
+const RGB = { off:[0,0,0], red:[255,0,0], green:[0,255,0], blue:[0,0,255], yellow:[255,255,0],
+              cyan:[0,255,255], magenta:[255,0,255], white:[255,255,255] };
+
+function crc16(bytes, crc = 0) {
+  for (const b of bytes) {
+    crc ^= b << 8;
+    for (let i = 0; i < 8; i++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+  }
+  return crc;
+}
+function uuEncode(raw) {
+  const out = [];
+  for (let i = 0; i < raw.length; i += 3) {
+    const a = raw[i], b = raw[i + 1], c = raw[i + 2];
+    out.push((a >> 2) + 32, (((a & 3) << 4) | (b >> 4)) + 32, (((b & 15) << 2) | (c >> 6)) + 32, (c & 63) + 32);
+  }
+  return out;
+}
+function uuDecode(enc) {
+  const out = [];
+  for (let i = 0; i + 3 < enc.length; i += 4) {
+    const [a, b, c, d] = [enc[i], enc[i + 1], enc[i + 2], enc[i + 3]].map(x => (x - 32) & 0xFF);
+    out.push(((a & 63) << 2) | ((b & 48) >> 4), ((b & 15) << 4) | ((c & 60) >> 2), ((c & 3) << 6) | (d & 63));
+  }
+  return out;
+}
+let ackId = 1, octoSeq = 0;
+function encodeFrame(layer, type, data = []) {
+  const id = ackId++;
+  const body = [(id >>> 24) & 255, (id >>> 16) & 255, (id >>> 8) & 255, id & 255, layer, type, data.length, ...data];
+  const c = crc16(body);
+  body.push(c >> 8, c & 255);
+  while (body.length % 3) body.push(0);
+  return new Uint8Array([2, ...uuEncode(body), 4]);
+}
+function decodeFrame(frame) {
+  const start = frame[0], raw = uuDecode(frame.slice(1, -1));
+  if (start === 2) {
+    const n = raw[2] + 5;
+    if (raw.length < n || crc16(raw.slice(0, n)) !== 0) return null;
+    return { kind: 'data', layer: raw[0], type: raw[1], data: raw.slice(3, 3 + raw[2]) };
+  }
+  return { kind: 'ctrl', start };
+}
+function octopus(idx, op, payload = [], proclayer = 0) {
+  octoSeq = octoSeq % 254 + 1;
+  return [idx, 0, 0, op, idx, proclayer, payload.length + 4, ...payload, octoSeq, 0, 0, 0];
+}
+
+/* ===================== USB (CDC su WebUSB) ===================== */
+let dev = null, epIn = 0, epOut = 0, rxBuf = [], txQueue = Promise.resolve();
+
+async function openDevice(d) {
+  await d.open();
+  if (d.configuration === null) await d.selectConfiguration(1);
+  let commIf = null, dataIf = null;
+  for (const itf of d.configuration.interfaces) {
+    const alt = itf.alternates[0];
+    if (alt.interfaceClass === 2) commIf = itf.interfaceNumber;
+    if (alt.interfaceClass === 10) {
+      dataIf = itf.interfaceNumber;
+      for (const ep of alt.endpoints) {
+        if (ep.direction === 'in') epIn = ep.endpointNumber; else epOut = ep.endpointNumber;
+      }
+    }
+  }
+  if (commIf !== null) {
+    try {
+      await d.claimInterface(commIf);
+      await d.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x20, value: 0, index: commIf },
+                                 new Uint8Array([0x00, 0xC2, 0x01, 0x00, 0, 0, 8]));  // 115200 8N1
+      await d.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x22, value: 3, index: commIf });
+    } catch (e) { log('Nota: interfaccia di controllo non disponibile (' + e.message + ')'); }
+  }
+  await d.claimInterface(dataIf);
+  dev = d;
+  readLoop(d);
+}
+
+async function readLoop(d) {
+  while (dev === d) {
+    try {
+      const r = await d.transferIn(epIn, 64);
+      if (r.data && r.data.byteLength) {
+        for (const b of new Uint8Array(r.data.buffer)) rxBuf.push(b);
+        parseRx();
+      }
+    } catch (e) {
+      if (dev === d) { log('Lettura USB interrotta: ' + e.message); onDisconnect(); }
+      return;
+    }
+  }
+}
+function parseRx() {
+  for (;;) {
+    const end = rxBuf.indexOf(4);
+    if (end < 0) return;
+    let s = -1;
+    for (let i = 0; i < end; i++) if ([2, 6, 0x15, 0x17, 0x18].includes(rxBuf[i])) { s = i; break; }
+    const frame = s >= 0 ? rxBuf.slice(s, end + 1) : null;
+    rxBuf = rxBuf.slice(end + 1);
+    if (frame) { const p = decodeFrame(frame); if (p && p.kind === 'data') onPacket(p); }
+  }
+}
+function send(layer, type, data = []) {
+  const frame = encodeFrame(layer, type, data);
+  const d = dev;
+  txQueue = txQueue.then(() => d ? d.transferOut(epOut, frame) : null).catch(e => log('Errore invio: ' + e.message));
+  return txQueue;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ===================== Logica luci ===================== */
+const lights = new Map();   // idx -> {mac, macRaw, rssi, color}
+const selected = new Set(); // luci usate negli esercizi
+let results = [], drill = null, modeWaiter = null, triggerWaiters = new Map(), logLines = [];
+let initializing = false, kaIndex = 0, lastPoll = 0;
+let selecting = false, sprint = null;
+
+function log(m) { logLines.unshift(new Date().toLocaleTimeString() + ' ' + m); logLines = logLines.slice(0, 60); render(); }
+const busy = () => !!(drill || sprint || selecting);
+
+function onPacket(p) {
+  if (p.layer === L_DONGLE && p.type === D_MODE) { if (modeWaiter) modeWaiter(p.data[0]); return; }
+  if (p.layer === L_NET && p.type === N_CONN_CHANGED && p.data.length === 14) {
+    const idx = p.data[0], valid = (p.data[1] & 0x80) !== 0;
+    if (valid && !lights.has(idx)) {
+      const macRaw = p.data.slice(6, 14);
+      const mac = macRaw.slice().reverse().map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase();
+      lights.set(idx, { mac, macRaw, rssi: null, color: 'off' });
+      selected.add(idx);
+      log(`Luce ${idx + 1} collegata (${mac.slice(-6)})`);
+      welcome(idx);
+    } else if (!valid && lights.has(idx)) {
+      lights.delete(idx); selected.delete(idx); log(`Luce ${idx + 1} scollegata`);
+    }
+    render(); return;
+  }
+  if (p.layer === L_APP && p.type === A_RX) {
+    const tRx = performance.now();
+    const d = p.data, n = d[5], o = d.slice(6, 6 + n);
+    const op = o[0], idx = o[1], pl = o.slice(4, 4 + o[3]);
+    const l = lights.get(idx);
+    if (l && d.length >= 8 + n) l.rssi = d[6 + n];
+    if (op === OP_TRIGGER_RESPONSE && pl.length >= 6) {
+      const ms = (pl[0] | (pl[1] << 8) | (pl[2] << 16) | (pl[3] << 24));
+      const res = { ms, missed: pl[4] !== 0, tRx };
+      const w = triggerWaiters.get(idx);
+      if (w) w(res); else if (!res.missed) log(`Tocco su luce ${idx + 1}: ${ms} ms`);
+    }
+  }
+}
+
+async function getMode() {
+  for (let i = 0; i < 3; i++) {
+    const r = await Promise.race([new Promise(res => { modeWaiter = res; send(L_DONGLE, D_GET_MODE); }), sleep(1000).then(() => null)]);
+    modeWaiter = null;
+    if (r !== null) return r;
+  }
+  return null;
+}
+
+async function initDongle() {
+  if (initializing) return;
+  initializing = true;
+  try {
+    const mode = await getMode();
+    if (mode === 0) {
+      log('Chiavetta in bootloader: avvio applicazione…');
+      setStatus('Avvio chiavetta…');
+      await send(L_DONGLE, D_EXIT_BL);
+      await sleep(2500);
+      if (dev) { const m2 = await getMode(); if (m2 === 1) await startNetwork(); }
+    } else if (mode === 1) {
+      await startNetwork();
+    } else {
+      log('La chiavetta non risponde'); setStatus('La chiavetta non risponde');
+    }
+  } finally { initializing = false; }
+}
+
+async function startNetwork() {
+  await send(L_NET, N_MACFILT_DISABLE);
+  await send(L_NET, N_SET_PAN, [PAN_ID & 255, PAN_ID >> 8]);
+  await send(L_DONGLE, D_SET_MODE, [1]);
+  await sleep(500);
+  await send(L_DONGLE, D_RF_SET_CHANNEL, [CHANNEL, 9]);
+  log('Rete radio attiva: togli le luci dal caricatore');
+  setStatus('Pronta - togli le luci dal caricatore');
+}
+
+async function welcome(idx) {
+  await sleep(300);
+  send(L_APP, A_TX, octopus(idx, OP_LIMITATION, [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1));
+  await sleep(300);
+  send(L_APP, A_TX, octopus(idx, OP_STATUS_REQUEST));
+  await sleep(200);
+  sendSunFilter(idx, sunLevel);
+  await flash(idx);
+}
+/* Filtro sole: livelli 0-4 come l'app originale (soglia alta 2..6) */
+let sunLevel = 0;
+try { sunLevel = +(localStorage.getItem('fitlight_sun') || 0); } catch (e) {}
+function sendSunFilter(idx, level) {
+  const thLow = 100, thHigh = level + 2;
+  send(L_APP, A_TX, octopus(idx, OP_SUNFILTER, [0xFF, thLow & 255, thLow >> 8, 0, 0, thHigh, 0, 0, 0, 0xFF]));
+}
+function setColor(idx, name) {
+  const [r, g, b] = RGB[name];
+  send(L_APP, A_TX, octopus(idx, OP_COLOR_SET, [r, g, b, 3]));
+  const l = lights.get(idx); if (l) l.color = name;
+}
+async function flash(idx) { setColor(idx, 'white'); await sleep(400); setColor(idx, 'off'); }
+
+/* Arma la luce (si accende e aspetta il passaggio/tocco). Ritorna l'istante in cui il comando è partito. */
+/* distanza: numero in cm (5-80) oppure 'refl' (riflettore). Codifica come l'app originale. */
+function encodeDistance(d) {
+  if (d === 'refl') return { dist: 10, conf: 100, flags: 0x21 };   // fronte di discesa = fascio interrotto
+  const cm = +d;
+  const conf = cm < 40 ? 100 : cm < 60 ? 90 : cm >= 70 ? 10 : 70;
+  return { dist: Math.min(75, cm), conf, flags: 0x01 };
+}
+async function arm(idx, name, timeoutMs, opts = {}) {
+  const beep = opts.beep ?? true, blink = opts.blink ?? 0;
+  const { dist, conf, flags } = encodeDistance(opts.distance ?? 40);
+  const [r, g, b] = RGB[name], t = timeoutMs;
+  const ledFlags = 0x03 | [0x00, 0x10, 0x20, 0x30][blink];
+  const payload = [dist, 0, conf, 40, flags, t & 255, (t >> 8) & 255, (t >> 16) & 255, (t >>> 24) & 255,
+                   ledFlags, beep ? 0x02 : 0x00, r, g, b, 0, 0, 0];
+  await send(L_APP, A_TX, octopus(idx, OP_ARM_AND_TRIGGER, payload));
+  return performance.now();
+}
+/* Arma e attende: risolve con {ms, missed, tArm, tRx, tEvent} oppure null (annullato/nessuna risposta). */
+function armAndWait(idx, name, timeoutMs, opts) {
+  return new Promise(resolve => {
+    let tArm = performance.now();
+    const done = res => { clearTimeout(timer); triggerWaiters.delete(idx); resolve(res); };
+    const timer = setTimeout(() => done(null), timeoutMs + 2500);
+    triggerWaiters.set(idx, res => done(res ? { ...res, tArm, tEvent: tArm + res.ms } : null));
+    arm(idx, name, timeoutMs, opts).then(t => { tArm = t; });
+  });
+}
+function cancelWaiters(ids) {
+  for (const [idx, w] of [...triggerWaiters.entries()]) if (!ids || ids.includes(idx)) w(null);
+}
+const activeLights = () => [...lights.keys()].filter(i => selected.has(i)).sort((a, b) => a - b);
+
+/* ---------- Scelta luci toccandole ---------- */
+async function selectByTouch() {
+  if (busy() || !lights.size) return;
+  selecting = true; selected.clear(); render();
+  log('Tocca le luci che vuoi usare (blu = non scelta, verde = scelta). Poi premi "Fine scelta".');
+  const loops = [...lights.keys()].map(async idx => {
+    while (selecting && lights.has(idx)) {
+      const r = await armAndWait(idx, selected.has(idx) ? 'green' : 'blue', 30000, { beep: true, distance: 20 });
+      if (!selecting) break;
+      if (r && !r.missed) {
+        if (selected.has(idx)) selected.delete(idx); else selected.add(idx);
+        render();
+        await sleep(400);
+      }
+    }
+  });
+  await Promise.all(loops);
+}
+function endSelectByTouch() {
+  selecting = false;
+  cancelWaiters();
+  for (const i of lights.keys()) setColor(i, 'off');
+  log(`Luci scelte: ${activeLights().map(i => i + 1).join(', ') || 'nessuna'}`);
+  render();
+}
+
+/* ---------- Reazione casuale ---------- */
+async function runDrill(hits, timeoutMs, color) {
+  const pool = activeLights();
+  if (!pool.length) return;
+  drill = { hits, done: 0, stop: false, current: null };
+  results = [];
+  log(`Reazione avviata: ${hits} tocchi su luci ${pool.map(i => i + 1).join(', ')}`);
+  let prev = null;
+  for (let n = 0; n < hits; n++) {
+    const ids = activeLights();
+    if (drill.stop || !ids.length) break;
+    await sleep(500 + Math.random() * 1000);
+    if (drill.stop) break;
+    const choices = ids.length > 1 ? ids.filter(i => i !== prev) : ids;
+    const idx = choices[Math.floor(Math.random() * choices.length)];
+    prev = idx; drill.current = idx; render();
+    const r = await armAndWait(idx, color, timeoutMs, { distance: $('rDist').value });
+    drill.current = null;
+    if (drill.stop) break;
+    results.push({ light: idx + 1, ms: r && !r.missed ? r.ms : null });
+    drill.done = n + 1; render();
+  }
+  const ok = results.filter(x => x.ms != null).map(x => x.ms);
+  log(ok.length ? `Fine: ${ok.length}/${results.length} presi, media ${Math.round(ok.reduce((a, b) => a + b, 0) / ok.length)} ms, migliore ${Math.min(...ok)} ms` : 'Esercizio terminato');
+  drill = null; render();
+}
+function stopDrill() {
+  if (!drill) return;
+  drill.stop = true;
+  cancelWaiters();
+  for (const i of lights.keys()) setColor(i, 'off');
+}
+
+/* ---------- Sprint ---------- */
+let spMidOrder = [];
+let spHistory = [];
+try { spHistory = JSON.parse(localStorage.getItem('fitlight_sprint') || '[]'); } catch (e) { spHistory = []; }
+function saveHistory() { try { localStorage.setItem('fitlight_sprint', JSON.stringify(spHistory.slice(0, 100))); } catch (e) {} }
+const fmt = ms => (ms / 1000).toFixed(2);
+
+async function runSprint() {
+  const startIdx = +$('spStart').value, stopIdx = +$('spStop').value;
+  const mids = spMidOrder.filter(i => lights.has(i) && i !== startIdx && i !== stopIdx);
+  if (!lights.has(startIdx) || !lights.has(stopIdx)) return log('Scegli la luce di start e quella di stop');
+  if (startIdx === stopIdx) return log('Start e stop devono essere luci diverse');
+  const opts = { distance: $('spSens').value, beep: $('spBeep').checked };
+  sprint = { phase: 'ready', t0: null, splits: [], startIdx, stopIdx, mids, stop: false };
+  render();
+  log(`Sprint: start luce ${startIdx + 1}${mids.length ? ', intermedi ' + mids.map(i => i + 1).join(' → ') : ''}, stop luce ${stopIdx + 1}`);
+
+  // 1) luce di start: gialla, aspetta il passaggio (max 2 minuti)
+  const r0 = await armAndWait(startIdx, 'yellow', 120000, opts);
+  if (sprint.stop) return endSprint(null);
+  if (!r0 || r0.missed) { log('Start: tempo scaduto'); return endSprint(null); }
+  sprint.t0 = r0.tEvent;
+  sprint.phase = 'running';
+  render(); tickTimer();
+
+  // 2) intermedi e stop: si armano subito dopo la partenza
+  const waits = [...mids, stopIdx].map(idx => armAndWait(idx, idx === stopIdx ? 'red' : 'blue', 60000, opts).then(r => {
+    if (r && !r.missed && sprint && sprint.phase === 'running') {
+      sprint.splits.push({ light: idx + 1, idx, t: r.tEvent - sprint.t0, isStop: idx === stopIdx });
+      render();
+    }
+    return r;
+  }));
+  const rs = await waits[waits.length - 1];
+  if (sprint.stop) return endSprint(null);
+  if (!rs || rs.missed) { log('Stop: tempo scaduto'); return endSprint(null); }
+  cancelWaiters(mids);           // intermedi non rilevati
+  await sleep(50);
+  const total = rs.tEvent - sprint.t0;
+  const splits = sprint.splits.filter(s => !s.isStop).sort((a, b) => a.t - b.t);
+  const run = { when: new Date().toLocaleString('it-IT'), total, splits: splits.map(s => ({ light: s.light, t: s.t })),
+                missedMids: mids.length - splits.length };
+  spHistory.unshift(run); saveHistory();
+  log(`Sprint: ${fmt(total)} s`);
+  endSprint(run);
+}
+function endSprint(run) {
+  cancelWaiters();
+  for (const i of lights.keys()) setColor(i, 'off');
+  sprint = null;
+  $('spTimer').textContent = run ? fmt(run.total) : '0.00';
+  renderSprintResult(run);
+  render();
+}
+function tickTimer() {
+  if (!sprint || sprint.phase !== 'running') return;
+  $('spTimer').textContent = fmt(performance.now() - sprint.t0);
+  requestAnimationFrame(tickTimer);
+}
+function renderSprintResult(run) {
+  if (!run) { $('spLast').innerHTML = ''; return; }
+  let prev = 0, rows = '';
+  for (const s of run.splits) { rows += `<tr><td>Luce ${s.light}</td><td class="num">${fmt(s.t)}</td><td class="num">+${fmt(s.t - prev)}</td></tr>`; prev = s.t; }
+  rows += `<tr><td><b>Arrivo</b></td><td class="num"><b>${fmt(run.total)}</b></td><td class="num">+${fmt(run.total - prev)}</td></tr>`;
+  $('spLast').innerHTML = `<table><tr><th>Punto</th><th class="num">Tempo s</th><th class="num">Parziale</th></tr>${rows}</table>` +
+    (run.missedMids ? `<p class="hint">${run.missedMids} intermedi non rilevati.</p>` : '');
+}
+function renderHistory() {
+  if (!spHistory.length) { $('spHistory').innerHTML = '<p class="hint">Nessuna prova.</p>'; return; }
+  const best = Math.min(...spHistory.map(r => r.total));
+  $('spHistory').innerHTML = '<table><tr><th>#</th><th>Quando</th><th class="num">Intermedi</th><th class="num">Totale s</th></tr>' +
+    spHistory.map((r, i) => `<tr><td>${spHistory.length - i}</td><td>${r.when}</td><td class="num">${r.splits.map(s => fmt(s.t)).join(' · ') || '–'}</td>` +
+      `<td class="num">${r.total === best ? '<b>' + fmt(r.total) + ' ★</b>' : fmt(r.total)}</td></tr>`).join('') + '</table>';
+}
+
+// keep-alive e aggiornamento collegamenti
+setInterval(() => {
+  if (!dev || initializing) return;
+  const now = Date.now();
+  if (now - lastPoll > 4000) { send(L_NET, N_GET_CONNECTIONS); lastPoll = now; }
+  const ids = [...lights.keys()].sort((a, b) => a - b);
+  if (ids.length) {
+    const idx = ids[kaIndex++ % ids.length];
+    send(L_APP, A_TX_BC, octopus(idx, OP_KEEP_ALIVE, lights.get(idx).macRaw, 1));
+  }
+  if (lights.size) setStatus(`Collegata - ${lights.size} luc${lights.size === 1 ? 'e' : 'i'}`);
+}, 600);
+
+let wakeLock = null;
+async function keepScreenOn() { try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
+
+function onDisconnect() {
+  dev = null; lights.clear(); selected.clear(); cancelWaiters();
+  selecting = false; if (drill) drill.stop = true; if (sprint) sprint.stop = true;
+  setStatus('Chiavetta scollegata'); render();
+}
+
+/* ===================== Interfaccia ===================== */
+const COLORS = { red:'#ff3b30', green:'#34c759', blue:'#0a84ff', yellow:'#ffd60a', cyan:'#32d2f5',
+                 magenta:'#ff2dd1', white:'#ffffff', off:'#2b2f36' };
+const NAMES = { red:'Rosso', green:'Verde', blue:'Blu', yellow:'Giallo', cyan:'Ciano', magenta:'Magenta', white:'Bianco', off:'Spento' };
+const order = Object.keys(COLORS);
+const $ = id => document.getElementById(id);
+let statusText = 'Chiavetta non collegata';
+function setStatus(t) { statusText = t; render(); }
+
+for (const [k, v] of Object.entries(COLORS)) {
+  const b = document.createElement('button');
+  b.className = 'sw'; b.style.background = v; b.title = NAMES[k];
+  b.onclick = () => { for (const i of activeLights()) setColor(i, k); render(); };
+  $('swatches').appendChild(b);
+  if (k !== 'off') $('dcolor').add(new Option(NAMES[k], k, false, k === 'green'));
+}
+for (const sel of document.querySelectorAll('.distSel')) {
+  for (let cm = 5; cm <= 80; cm += 5) sel.add(new Option(cm + ' cm', cm, false, cm === +sel.dataset.def));
+  if (sel.dataset.refl) sel.add(new Option('Riflettore (fotocellula)', 'refl'));
+  try { const v = localStorage.getItem('fitlight_dist_' + sel.id); if (v) sel.value = v; } catch (e) {}
+  sel.onchange = () => { try { localStorage.setItem('fitlight_dist_' + sel.id, sel.value); } catch (e) {} render(); };
+}
+$('sunSel').value = sunLevel;
+$('sunApply').onclick = () => {
+  sunLevel = +$('sunSel').value;
+  try { localStorage.setItem('fitlight_sun', sunLevel); } catch (e) {}
+  for (const i of lights.keys()) sendSunFilter(i, sunLevel);
+  log(`Filtro sole impostato: ${sunLevel ? 'livello ' + sunLevel : 'nessun sole'}`);
+};
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('sel', x === b));
+  document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
+});
+$('start').onclick = () => { if (!busy() && activeLights().length) runDrill(+$('hits').value, +$('timeout').value, $('dcolor').value); };
+$('stop').onclick = stopDrill;
+$('selAll').onclick = () => { if (!busy()) { for (const i of lights.keys()) selected.add(i); render(); } };
+$('selNone').onclick = () => { if (!busy()) { selected.clear(); render(); } };
+$('selTouch').onclick = () => { if (selecting) endSelectByTouch(); else selectByTouch(); };
+$('spGo').onclick = () => { if (!busy()) runSprint(); };
+$('spCancel').onclick = () => { if (sprint) { sprint.stop = true; cancelWaiters(); log('Sprint annullato'); } };
+$('spClear').onclick = () => { if (confirm('Cancellare tutto lo storico sprint?')) { spHistory = []; saveHistory(); render(); } };
+
+let lastSprintKey = '';
+function renderSprintSetup() {
+  const ids = [...lights.keys()].sort((a, b) => a - b);
+  const key = ids.join(',');
+  if (key !== lastSprintKey) {
+    lastSprintKey = key;
+    for (const [sel, def] of [[$('spStart'), ids[0]], [$('spStop'), ids[ids.length - 1]]]) {
+      const keep = +sel.value;
+      sel.innerHTML = ids.map(i => `<option value="${i}">Luce ${i + 1}</option>`).join('');
+      if (ids.length) sel.value = sel.dataset.user && ids.includes(keep) ? keep : def;
+    }
+    spMidOrder = spMidOrder.filter(i => ids.includes(i));
+  }
+  const s = +$('spStart').value, e = +$('spStop').value;
+  $('spMids').innerHTML = '';
+  const cand = ids.filter(i => i !== s && i !== e);
+  if (!cand.length) $('spMids').innerHTML = '<span class="hint">Servono almeno 3 luci per gli intermedi.</span>';
+  for (const i of cand) {
+    const pos = spMidOrder.indexOf(i);
+    const b = document.createElement('button');
+    b.className = 'chip' + (pos >= 0 ? ' on' : '');
+    b.textContent = pos >= 0 ? `${pos + 1}° · Luce ${i + 1}` : `Luce ${i + 1}`;
+    b.disabled = !!sprint;
+    b.onclick = () => { if (pos >= 0) spMidOrder.splice(pos, 1); else spMidOrder.push(i); render(); };
+    $('spMids').appendChild(b);
+  }
+  $('spReflHint').hidden = $('spSens').value !== 'refl';
+  const ok = ids.length >= 2 && s !== e;
+  $('spGo').disabled = busy() || !ok;
+  $('spCancel').disabled = !sprint;
+  $('spStart').disabled = $('spStop').disabled = !!sprint;
+  $('spPhase').textContent = !sprint
+    ? (ids.length < 2 ? 'Servono almeno 2 luci collegate' : s === e ? 'Start e stop devono essere diverse' : 'Premi Pronti')
+    : sprint.phase === 'ready' ? `Pronti: parti passando davanti alla luce ${sprint.startIdx + 1} (gialla)`
+    : `In corsa… arrivo alla luce ${sprint.stopIdx + 1} (rossa)` + (sprint.splits.filter(x => !x.isStop).length ? ' · intermedi: ' + sprint.splits.filter(x => !x.isStop).map(x => fmt(x.t)).join(' · ') : '');
+}
+$('spStart').onchange = $('spStop').onchange = e => { e.target.dataset.user = '1'; render(); };
+
+function render() {
+  $('status').textContent = statusText;
+  $('dot').classList.toggle('on', lights.size > 0);
+  $('connectBox').hidden = !!dev;
+  const cur = drill ? drill.current : null;
+  const box = $('lights');
+  box.innerHTML = lights.size ? '' : `<div class="empty">${dev ? 'Togli le luci dal caricatore: compariranno qui.' : 'Collega la chiavetta.'}</div>`;
+  for (const [idx, l] of [...lights.entries()].sort((a, b) => a[0] - b[0])) {
+    const d = document.createElement('div'); d.className = 'light' + (selected.has(idx) ? '' : ' unused');
+    const bulb = document.createElement('div');
+    bulb.className = 'bulb' + (cur === idx ? ' active' : '');
+    bulb.style.background = cur === idx ? COLORS[$('dcolor').value]
+      : selecting ? (selected.has(idx) ? COLORS.green : COLORS.blue) : COLORS[l.color];
+    bulb.onclick = () => { if (!busy()) { setColor(idx, order[(order.indexOf(l.color) + 1) % order.length]); render(); } };
+    d.appendChild(bulb);
+    d.insertAdjacentHTML('beforeend', `<b>Luce ${idx + 1}</b><small>${l.mac.slice(-6)}${l.rssi != null ? ' · ' + l.rssi : ''}</small>`);
+    const lab = document.createElement('label');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = selected.has(idx); cb.disabled = busy();
+    cb.onchange = () => { if (cb.checked) selected.add(idx); else selected.delete(idx); render(); };
+    lab.append(cb, ' Usa');
+    d.appendChild(lab);
+    const id = document.createElement('button'); id.textContent = 'Identifica'; id.style.marginTop = '6px'; id.disabled = busy();
+    id.onclick = () => flash(idx);
+    d.appendChild(id);
+    box.appendChild(d);
+  }
+  $('selTouch').textContent = selecting ? 'Fine scelta' : 'Scegli toccando';
+  $('selTouch').classList.toggle('primary', selecting);
+  $('selTouch').disabled = !lights.size || !!drill || !!sprint;
+  $('selAll').disabled = $('selNone').disabled = busy();
+  $('selHint').textContent = selecting ? 'Passa la mano sulle luci: verde = scelta, blu = non scelta.'
+    : `Usate negli esercizi: ${activeLights().length} di ${lights.size}.`;
+
+  $('start').disabled = busy() || !activeLights().length;
+  $('stop').disabled = !drill;
+  $('reactHint').textContent = lights.size && !activeLights().length ? 'Nessuna luce scelta.' : '';
+  const ok = results.filter(x => x.ms != null).map(x => x.ms);
+  $('sDone').textContent = drill ? `${drill.done}/${drill.hits}` : (results.length || '–');
+  $('sAvg').textContent = ok.length ? Math.round(ok.reduce((a, b) => a + b, 0) / ok.length) : '–';
+  $('sBest').textContent = ok.length ? Math.min(...ok) : '–';
+  $('sMiss').textContent = results.length ? results.length - ok.length : '–';
+  $('results').innerHTML = results.map(x => `<li>Luce ${x.light}: ${x.ms != null ? x.ms + ' ms' : 'mancato'}</li>`).join('');
+  renderSprintSetup();
+  renderHistory();
+  $('log').textContent = logLines.join('\n');
+}
+
+async function connectFlow(d) {
+  try {
+    await openDevice(d);
+    setStatus('Chiavetta collegata');
+    log('Chiavetta collegata');
+    keepScreenOn();
+    await initDongle();
+  } catch (e) {
+    log('Errore apertura chiavetta: ' + e.message);
+    setStatus('Errore: ' + e.message);
+  }
+}
+
+if (!navigator.usb) {
+  $('nousb').hidden = false; $('connectBox').hidden = true;
+  $('nousbMsg').textContent = window.isSecureContext
+    ? 'Questo browser non supporta WebUSB. Usa Chrome su Android.'
+    : 'La pagina non è aperta in modo sicuro. In Chrome apri chrome://flags, cerca "Insecure origins treated as secure", aggiungi ' + location.origin + ', attiva e riavvia Chrome.';
+} else {
+  $('connect').onclick = async () => {
+    try { await connectFlow(await navigator.usb.requestDevice({ filters: [{ vendorId: VID, productId: PID }] })); }
+    catch (e) { if (e.name !== 'NotFoundError') log('Errore: ' + e.message); }
+  };
+  navigator.usb.addEventListener('connect', e => {
+    if (e.device.vendorId === VID && !dev) { log('Chiavetta ricollegata'); connectFlow(e.device); }
+  });
+  navigator.usb.addEventListener('disconnect', e => {
+    if (dev && e.device === dev) { log('Chiavetta scollegata'); onDisconnect(); }
+  });
+  navigator.usb.getDevices().then(ds => { const d = ds.find(x => x.vendorId === VID); if (d) connectFlow(d); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && dev) keepScreenOn(); });
+}
+render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
