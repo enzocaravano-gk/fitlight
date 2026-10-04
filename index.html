@@ -31,7 +31,10 @@
   .dot.on { background: var(--ok); }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
   .tabs { display: flex; gap: 6px; margin-bottom: 14px; position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 6px 0; }
-  .tabs button { flex: 1; }
+  .tabs button { flex: 1; padding: 10px 4px; font-size: 15px; }
+  .tabs button[data-tab="tools"] { flex: 0 0 48px; }
+  .big-num { font-size: 44px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; margin: 6px 0 0; }
+  .sub { text-align: center; color: var(--muted); margin-bottom: 8px; }
   .tabs button.sel { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
   .lights { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
   .light { border: 1px solid var(--line); border-radius: 12px; padding: 10px; text-align: center; }
@@ -116,7 +119,9 @@
   <div class="tabs">
     <button data-tab="reaction" class="sel">Reazione</button>
     <button data-tab="sprint">Sprint</button>
-    <button data-tab="tools">Strumenti</button>
+    <button data-tab="beep">Beep</button>
+    <button data-tab="simon">Simon</button>
+    <button data-tab="tools" title="Strumenti">⚙︎</button>
   </div>
 
   <section data-panel="reaction">
@@ -215,6 +220,70 @@
   <section data-panel="sprint" hidden>
     <h2>Archivio sessioni</h2>
     <div id="sesArchive"><p class="hint">Nessuna sessione precedente.</p></div>
+  </section>
+
+  <section data-panel="beep" hidden>
+    <h2>Beep test – navetta 20 m</h2>
+    <p class="hint" style="margin-top:0">Due luci, una per ogni estremità. A ogni beep si accende quella opposta: raggiungila prima del beep successivo. Ogni livello è più veloce. Il test finisce dopo i mancati consecutivi scelti.</p>
+    <div class="row">
+      <label>Luce A <select id="btA"></select></label>
+      <label>Luce B <select id="btB"></select></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label>Distanza <select id="btDist" class="distSel" data-def="40"></select></label>
+      <label>Fine dopo <select id="btFails" data-save><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select> mancati di fila</label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label>Livello iniziale <select id="btStartLvl" data-save></select></label>
+      <label style="flex:1">Atleta <input id="btAthlete" list="spAthletes" placeholder="facoltativo" style="flex:1;min-width:0"></label>
+    </div>
+    <div class="big-num" id="btLevel">–</div>
+    <div class="sub" id="btSub">Pronto</div>
+    <div class="row">
+      <button class="primary" id="btGo" style="flex:1">Avvia</button>
+      <button id="btStop" style="flex:1">Ferma</button>
+    </div>
+    <div id="btResult"></div>
+    <h3>Storico beep test</h3>
+    <div id="btHistory"><p class="hint">Nessun test.</p></div>
+  </section>
+
+  <section data-panel="simon" hidden>
+    <h2>Simon – memoria</h2>
+    <p class="hint" style="margin-top:0">Le luci si accendono in sequenza: ripetila toccandole nello stesso ordine. Ogni luce ha il suo colore. Al primo errore lampeggiano tutte rosse.</p>
+    <div class="row">
+      <label>Modalità
+        <select id="smMode" data-save>
+          <option value="grow">Progressiva (+1 luce a ogni giro)</option>
+          <option value="fixed">Lunghezza fissa</option>
+        </select>
+      </label>
+      <label data-sm="fixed">Lunghezza <input id="smLen" type="number" min="2" max="30" value="5" data-save></label>
+      <label data-sm="fixed">Giri <input id="smRounds" type="number" min="1" max="50" value="5" data-save></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label>Velocità
+        <select id="smSpeed" data-save>
+          <option value="1000">Lenta</option>
+          <option value="700" selected>Media</option>
+          <option value="450">Veloce</option>
+        </select>
+      </label>
+      <label>Tempo per tocco ms <input id="smWait" type="number" min="1000" max="15000" step="500" value="4000" data-save></label>
+      <label>Distanza <select id="smDist" class="distSel" data-def="30"></select></label>
+    </div>
+    <div class="big-num" id="smScore">–</div>
+    <div class="sub" id="smSub">Pronto</div>
+    <div class="row">
+      <button class="primary" id="smGo" style="flex:1">Avvia</button>
+      <button id="smStop" style="flex:1">Ferma</button>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="smBest">–</b><span>sequenza max</span></div>
+      <div class="stat"><b id="smHits">–</b><span>tocchi giusti</span></div>
+      <div class="stat"><b id="smAvg">–</b><span>media ms</span></div>
+      <div class="stat"><b id="smRecord">–</b><span>record</span></div>
+    </div>
   </section>
 
   <section data-panel="tools" hidden>
@@ -374,7 +443,8 @@ let initializing = false, kaIndex = 0, lastPoll = 0, netStart = 0, tick = 0, stI
 let selecting = false, sprint = null;
 
 function log(m) { logLines.unshift(new Date().toLocaleTimeString() + ' ' + m); logLines = logLines.slice(0, 60); render(); }
-const busy = () => !!(drill || sprint || selecting);
+const busy = () => !!(drill || sprint || selecting || beep || simon);
+let beep = null, simon = null;
 
 function onPacket(p) {
   if (p.layer === L_DONGLE && p.type === D_MODE) { if (modeWaiter) modeWaiter(p.data[0]); return; }
@@ -497,12 +567,12 @@ function encodeDistance(d) {
   return { dist: Math.min(75, cm), conf, flags: 0x01 };
 }
 async function arm(idx, name, timeoutMs, opts = {}) {
-  const beep = opts.beep ?? true, blink = opts.blink ?? 0;
+  const beep = opts.beep ?? true, blink = opts.blink ?? 0, hit = opts.hit || [0, 0, 0];
   const { dist, conf, flags } = encodeDistance(opts.distance ?? 40);
   const [r, g, b] = RGB[name], t = timeoutMs;
   const ledFlags = 0x03 | [0x00, 0x10, 0x20, 0x30][blink];
   const payload = [dist, 0, conf, 40, flags, t & 255, (t >> 8) & 255, (t >> 16) & 255, (t >>> 24) & 255,
-                   ledFlags, beep ? 0x02 : 0x00, r, g, b, 0, 0, 0];
+                   ledFlags, beep ? 0x02 : 0x00, r, g, b, ...hit];
   await send(L_APP, A_TX, octopus(idx, OP_ARM_AND_TRIGGER, payload));
   return performance.now();
 }
@@ -666,6 +736,205 @@ function stopDrill() {
   drill.stop = true;
   cancelWaiters();
   for (const i of lights.keys()) setColor(i, 'off');
+}
+
+/* ---------- Suoni dal telefono ---------- */
+let audioCtx = null;
+function tone(freq = 1000, ms = 180, when = 0) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = audioCtx.currentTime + when, o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = freq; o.type = 'square';
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.4, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+    o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + ms / 1000 + 0.02);
+  } catch (e) {}
+}
+const vibrate = p => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} };
+
+/* ---------- Beep test (navetta 20 m, tabella dell'app originale) ---------- */
+const BT_LAPS = [7, 8, 8, 9, 9, 10, 10, 11, 11, 11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 16, 16];
+const BT_MS = [8470, 8000, 7580, 7200, 6860, 6550, 6260, 6000, 5760, 5540, 5330, 5140, 4970, 4800, 4650, 4500, 4360, 4240, 4110, 4000, 3890];
+const BT_COLORS = ['green', 'blue', 'cyan', 'yellow', 'magenta', 'white'];
+const btSpeed = lvl => 8.0 + 0.5 * lvl;                 // km/h al livello (1 = 8,5 km/h)
+const btVo2 = lvl => Math.max(0, -24.4 + 6.0 * btSpeed(lvl)); // Léger & Lambert: stima VO2max adulti
+let btHistory = [];
+try { btHistory = JSON.parse(localStorage.getItem('fitlight_beep') || '[]'); } catch (e) {}
+const saveBt = () => { try { localStorage.setItem('fitlight_beep', JSON.stringify(btHistory.slice(0, 200))); } catch (e) {} };
+
+async function runBeepTest() {
+  const A = +$('btA').value, B = +$('btB').value;
+  if (!lights.has(A) || !lights.has(B) || A === B) return log('Beep test: scegli due luci diverse');
+  const failsMax = +$('btFails').value, startLvl = +$('btStartLvl').value;
+  const opts = { distance: $('btDist').value, beep: true };
+  beep = { stop: false, level: startLvl, shuttle: 0, lastOk: null, laps: 0, okLaps: 0, phase: 'countdown' };
+  render();
+  log(`Beep test avviato: luce ${A + 1} ↔ luce ${B + 1}, dal livello ${startLvl}`);
+  // conto alla rovescia: 3 beep brevi + luce A bianca
+  setColor(A, 'white');
+  for (let k = 3; k > 0 && !beep.stop; k--) { $('btSub').textContent = `Parti tra ${k}…`; tone(800, 120); await sleep(1000); }
+  setColor(A, 'off');
+  if (beep.stop) return endBeepTest();
+  tone(1200, 350); vibrate(200);
+  beep.phase = 'running';
+  let fails = 0, lapIdx = 0, next = performance.now();
+  outer:
+  for (let L = startLvl; L <= BT_LAPS.length; L++) {
+    const lapMs = BT_MS[L - 1];
+    for (let sh = 1; sh <= BT_LAPS[L - 1]; sh++) {
+      if (beep.stop) break outer;
+      beep.level = L; beep.shuttle = sh; beep.lapMs = lapMs; beep.lapStart = next; render();
+      const dest = lapIdx % 2 === 0 ? B : A;
+      const deadline = next + lapMs;
+      const r = await Promise.race([armAndWait(dest, BT_COLORS[(L - 1) % BT_COLORS.length], lapMs, opts), sleep(lapMs + 400).then(() => null)]);
+      const ok = r && !r.missed && r.tEvent <= deadline + 150;
+      beep.laps++; lapIdx++;
+      if (ok) { fails = 0; beep.okLaps++; beep.lastOk = { level: L, shuttle: sh }; }
+      else { fails++; log(`Beep test: navetta mancata (livello ${L}-${sh}) ${fails}/${failsMax}`); vibrate([80, 60, 80]); }
+      // aspetta il beep (fine navetta) senza accumulare ritardi
+      const wait = deadline - performance.now();
+      if (wait > 0) await sleep(wait);
+      next = deadline;
+      if (beep.stop) break outer;
+      const levelUp = sh === BT_LAPS[L - 1];
+      if (levelUp) { tone(1000, 140); tone(1000, 140, 0.2); tone(1400, 250, 0.4); } else tone(1000, 220);
+      if (fails >= failsMax) break outer;
+    }
+  }
+  endBeepTest(!beep.stop);
+}
+function endBeepTest(finished) {
+  const b = beep;
+  cancelWaiters();
+  for (const i of lights.keys()) setColor(i, 'off');
+  beep = null;
+  if (finished && b && b.lastOk) {
+    const res = { when: new Date().toISOString(), athlete: $('btAthlete').value.trim(), level: b.lastOk.level, shuttle: b.lastOk.shuttle,
+                  distance: b.okLaps * 20, vo2: Math.round(btVo2(b.lastOk.level) * 10) / 10 };
+    btHistory.unshift(res); saveBt();
+    log(`Beep test: livello ${res.level}-${res.shuttle}, ${res.distance} m, VO2max stimato ${res.vo2}`);
+    $('btResult').innerHTML = `<table><tr><th>Risultato</th><th class="num">${res.level}-${res.shuttle}</th></tr>` +
+      `<tr><td>Distanza</td><td class="num">${res.distance} m</td></tr><tr><td>Velocità finale</td><td class="num">${btSpeed(res.level).toFixed(1)} km/h</td></tr>` +
+      `<tr><td>VO2max stimato*</td><td class="num">${res.vo2} ml/kg/min</td></tr></table><p class="hint">*Stima (formula Léger &amp; Lambert, adulti): solo indicativa.</p>`;
+    tone(600, 600);
+  } else if (finished) { log('Beep test terminato senza navette completate'); }
+  render();
+}
+function renderBeep() {
+  const ids = [...lights.keys()].sort((a, b) => a - b);
+  fillLightSelect($('btA'), ids, ids[0]); fillLightSelect($('btB'), ids, ids[ids.length - 1]);
+  $('btGo').disabled = busy() || ids.length < 2 || $('btA').value === $('btB').value;
+  $('btStop').disabled = !beep;
+  for (const el of ['btA', 'btB', 'btDist', 'btFails', 'btStartLvl', 'btAthlete']) $(el).disabled = !!beep;
+  if (beep && beep.phase === 'running') {
+    $('btLevel').textContent = `${beep.level} – ${beep.shuttle}`;
+    $('btSub').textContent = `Livello ${beep.level}, navetta ${beep.shuttle}/${BT_LAPS[beep.level - 1]} · ${btSpeed(beep.level).toFixed(1)} km/h · ${(beep.lapMs / 1000).toFixed(2)} s`;
+  } else if (!beep) {
+    $('btLevel').textContent = btHistory[0] ? `${btHistory[0].level} – ${btHistory[0].shuttle}` : '–';
+    $('btSub').textContent = ids.length < 2 ? 'Servono 2 luci collegate' : 'Pronto';
+  }
+  $('btHistory').innerHTML = btHistory.length ? '<table><tr><th>Data</th><th>Atleta</th><th class="num">Livello</th><th class="num">m</th><th class="num">VO2*</th><th></th></tr>' +
+    btHistory.map((r, i) => `<tr><td>${fmtDate(r.when)}</td><td>${esc(r.athlete) || '–'}</td><td class="num"><b>${r.level}-${r.shuttle}</b></td><td class="num">${r.distance}</td><td class="num">${r.vo2}</td>` +
+      `<td class="num"><button data-btdel="${i}" style="padding:2px 9px">×</button></td></tr>`).join('') + '</table>' : '<p class="hint">Nessun test.</p>';
+  $('btHistory').querySelectorAll('[data-btdel]').forEach(b => b.onclick = () => { if (confirm('Eliminare questo test?')) { btHistory.splice(+b.dataset.btdel, 1); saveBt(); render(); } });
+}
+const selKeys = new WeakMap();
+function fillLightSelect(sel, ids, def) {
+  const key = ids.join(',');
+  if (selKeys.get(sel) === key) return;
+  selKeys.set(sel, key);
+  const keep = +sel.value;
+  sel.innerHTML = ids.map(i => `<option value="${i}">Luce ${i + 1}</option>`).join('');
+  if (ids.length) sel.value = sel.dataset.user && ids.includes(keep) ? keep : def;
+  sel.onchange = () => { sel.dataset.user = '1'; render(); };
+}
+
+/* ---------- Simon (memoria) ---------- */
+const SIMON_COLORS = ['red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'white'];
+let smRecord = 0;
+try { smRecord = +(localStorage.getItem('fitlight_simon_record') || 0); } catch (e) {}
+const simonColor = (idx, pool) => SIMON_COLORS[pool.indexOf(idx) % SIMON_COLORS.length];
+
+async function runSimon() {
+  const pool = activeLights();
+  if (pool.length < 2) return log('Simon: servono almeno 2 luci scelte');
+  const grow = $('smMode').value === 'grow';
+  const len = Math.max(2, +$('smLen').value || 5), rounds = Math.max(1, +$('smRounds').value || 5);
+  const show = +$('smSpeed').value, waitMs = Math.max(1000, +$('smWait').value || 4000);
+  const dist = $('smDist').value;
+  simon = { stop: false, seq: [], round: 0, best: 0, hits: 0, times: [], phase: 'show', pos: 0 };
+  render();
+  log(`Simon avviato (${grow ? 'progressiva' : `lunghezza ${len}, ${rounds} giri`}) su luci ${pool.map(i => i + 1).join(', ')}`);
+  const addStep = () => { let c; do { c = pool[Math.floor(Math.random() * pool.length)]; } while (simon.seq.length && c === simon.seq[simon.seq.length - 1] && pool.length > 1); simon.seq.push(c); };
+  let failed = false;
+  while (!simon.stop) {
+    simon.round++;
+    if (grow) addStep(); else { simon.seq = []; for (let k = 0; k < len; k++) addStep(); }
+    // 1) mostra la sequenza
+    simon.phase = 'show'; render();
+    await sleep(700);
+    for (const idx of simon.seq) {
+      if (simon.stop) break;
+      setColor(idx, simonColor(idx, pool)); tone(400 + pool.indexOf(idx) * 120, show * 0.8);
+      await sleep(show); setColor(idx, 'off'); await sleep(show * 0.4);
+    }
+    if (simon.stop) break;
+    // 2) l'atleta ripete: tutte le luci in attesa (spente), quella toccata si illumina del suo colore
+    simon.phase = 'repeat'; simon.pos = 0; render();
+    for (let k = 0; k < simon.seq.length && !simon.stop; k++) {
+      simon.pos = k; render();
+      const t0 = performance.now();
+      const touched = await new Promise(resolve => {
+        let done = false;
+        const fin = v => { if (!done) { done = true; resolve(v); } };
+        for (const idx of pool) {
+          const [r, g, b] = RGB[simonColor(idx, pool)];
+          armAndWait(idx, 'off', waitMs, { distance: dist, beep: false, hit: [r, g, b] }).then(res => { if (res && !res.missed) fin({ idx, ms: res.ms }); });
+        }
+        sleep(waitMs + 600).then(() => fin(null));
+      });
+      cancelWaiters(pool);
+      if (simon.stop) break;
+      if (touched && touched.idx === simon.seq[k]) {
+        simon.hits++; simon.times.push(touched.ms); tone(400 + pool.indexOf(touched.idx) * 120, 150);
+        await sleep(250); setColor(touched.idx, 'off');
+      } else {
+        failed = true;
+        log(touched ? `Simon: errore al passo ${k + 1} (toccata luce ${touched.idx + 1}, era la ${simon.seq[k] + 1})` : `Simon: tempo scaduto al passo ${k + 1}`);
+        break;
+      }
+    }
+    if (simon.stop) break;
+    if (failed) break;
+    simon.best = Math.max(simon.best, simon.seq.length);
+    tone(1300, 120); tone(1600, 160, 0.15);
+    for (const idx of pool) setColor(idx, 'green'); await sleep(400); for (const idx of pool) setColor(idx, 'off');
+    if (!grow && simon.round >= rounds) break;
+    await sleep(600);
+  }
+  if (failed) { for (let k = 0; k < 3; k++) { for (const idx of pool) setColor(idx, 'red'); tone(200, 250); await sleep(300); for (const idx of pool) setColor(idx, 'off'); await sleep(200); } vibrate(400); }
+  const s = simon;
+  if (s && s.best > smRecord && !s.stop) { smRecord = s.best; try { localStorage.setItem('fitlight_simon_record', smRecord); } catch (e) {} log(`🏆 Nuovo record Simon: ${smRecord}`); }
+  if (s) log(`Simon: sequenza massima ${s.best}, tocchi giusti ${s.hits}` + (s.times.length ? `, media ${Math.round(s.times.reduce((a, b) => a + b, 0) / s.times.length)} ms` : ''));
+  lastSimon = s;
+  cancelWaiters();
+  for (const i of lights.keys()) setColor(i, 'off');
+  simon = null; render();
+}
+let lastSimon = null;
+function renderSimon() {
+  const g = $('smMode').value;
+  document.querySelectorAll('[data-sm]').forEach(el => el.hidden = el.dataset.sm !== g);
+  const s = simon || lastSimon;
+  $('smGo').disabled = busy() || activeLights().length < 2;
+  $('smStop').disabled = !simon;
+  for (const el of ['smMode', 'smLen', 'smRounds', 'smSpeed', 'smWait', 'smDist']) $(el).disabled = !!simon;
+  $('smScore').textContent = simon ? (simon.phase === 'show' ? `Guarda… (${simon.seq.length})` : `${simon.pos + 1} / ${simon.seq.length}`) : (lastSimon ? lastSimon.best : '–');
+  $('smSub').textContent = simon ? (simon.phase === 'show' ? `Giro ${simon.round}: memorizza la sequenza` : 'Ripeti toccando le luci') :
+    activeLights().length < 2 ? 'Servono almeno 2 luci scelte' : (lastSimon ? 'Sequenza massima raggiunta' : 'Pronto');
+  $('smBest').textContent = s ? s.best : '–';
+  $('smHits').textContent = s ? s.hits : '–';
+  $('smAvg').textContent = s && s.times.length ? Math.round(s.times.reduce((a, b) => a + b, 0) / s.times.length) : '–';
+  $('smRecord').textContent = smRecord || '–';
 }
 
 /* ---------- Sprint ---------- */
@@ -930,7 +1199,7 @@ setInterval(() => {
     const idx = ids[kaIndex++ % ids.length];
     send(L_APP, A_TX_BC, octopus(idx, OP_KEEP_ALIVE, lights.get(idx).macRaw, 1));
     tick++;
-    const racing = sprint && sprint.phase === 'running';
+    const racing = (sprint && sprint.phase === 'running') || beep || simon;
     if (tick % 3 === 0 && !racing && !(drill && drill.lit.size)) {
       send(L_APP, A_TX, octopus(ids[stIndex++ % ids.length], OP_STATUS_REQUEST));
     }
@@ -943,7 +1212,7 @@ async function keepScreenOn() { try { wakeLock = await navigator.wakeLock.reques
 
 function onDisconnect() {
   dev = null; lights.clear(); selected.clear(); cancelWaiters();
-  selecting = false; if (drill) drill.stop = true; if (sprint) sprint.stop = true;
+  selecting = false; if (drill) drill.stop = true; if (sprint) sprint.stop = true; if (beep) beep.stop = true; if (simon) simon.stop = true;
   setStatus(expectingReset ? 'Riavvio chiavetta…' : 'Chiavetta scollegata'); render();
   autoReconnect();
 }
@@ -999,6 +1268,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
 });
 $('start').onclick = () => { if (!busy() && activeLights().length) { lastSets = []; runDrill(reactSettings()); } };
 for (const k of Object.keys(COLORS)) if (k !== 'off') $('rNogoColor').add(new Option(NAMES[k], k, false, k === 'red'));
+for (let L = 1; L <= 21; L++) $('btStartLvl').add(new Option(`${L} (${btSpeed(L).toFixed(1)} km/h)`, L));
 document.querySelectorAll('[data-save]').forEach(el => {
   try { const v = localStorage.getItem('fitlight_set_' + el.id); if (v != null) el.value = v; } catch (e) {}
   el.addEventListener('change', () => { try { localStorage.setItem('fitlight_set_' + el.id, el.value); } catch (e) {} render(); });
@@ -1011,6 +1281,10 @@ $('spGo').onclick = () => { if (!busy()) runSprint(); };
 $('spCancel').onclick = () => { if (sprint) { sprint.stop = true; cancelWaiters(); log('Sprint annullato'); } };
 $('sesName').oninput = () => { curSession().name = $('sesName').value || 'Sessione'; saveSessions(); };
 $('sesName').onchange = () => render();
+$('btGo').onclick = () => { if (!busy()) { tone(1, 1); runBeepTest(); } };
+$('btStop').onclick = () => { if (beep) { beep.stop = true; cancelWaiters(); log('Beep test fermato'); } };
+$('smGo').onclick = () => { if (!busy()) { tone(1, 1); runSimon(); } };
+$('smStop').onclick = () => { if (simon) { simon.stop = true; cancelWaiters(); log('Simon fermato'); } };
 $('sesNew').onclick = () => { if (!sprint) { newSession(); render(); } };
 $('sesPdf').onclick = () => exportPdf(curSession(), false);
 $('sesShare').onclick = () => exportPdf(curSession(), true);
@@ -1141,6 +1415,8 @@ function render() {
   renderReaction();
   renderSprintSetup();
   renderSessions();
+  renderBeep();
+  renderSimon();
   $('log').textContent = logLines.join('\n');
 }
 
