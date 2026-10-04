@@ -33,6 +33,10 @@
   .tabs { display: flex; gap: 6px; margin-bottom: 14px; position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 6px 0; }
   .tabs button { flex: 1; padding: 10px 4px; font-size: 15px; }
   .tabs button[data-tab="tools"] { flex: 0 0 48px; }
+  #btPeople table { table-layout: fixed; }
+  #btPeople th:nth-child(1) { width: 38%; } #btPeople th:nth-child(4) { width: 38px; }
+  #btPeople input, #btPeople select { width: 100%; min-width: 0; padding: 6px 4px; font-size: 14px; }
+  #btPeople td { padding: 4px 2px; }
   .big-num { font-size: 44px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; margin: 6px 0 0; }
   .sub { text-align: center; color: var(--muted); margin-bottom: 8px; }
   .tabs button.sel { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
@@ -224,18 +228,18 @@
 
   <section data-panel="beep" hidden>
     <h2>Beep test – navetta 20 m</h2>
-    <p class="hint" style="margin-top:0">Due luci, una per ogni estremità. A ogni beep si accende quella opposta: raggiungila prima del beep successivo. Ogni livello è più veloce. Il test finisce dopo i mancati consecutivi scelti.</p>
-    <div class="row">
-      <label>Luce A <select id="btA"></select></label>
-      <label>Luce B <select id="btB"></select></label>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <label>Distanza <select id="btDist" class="distSel" data-def="40"></select></label>
+    <p class="hint" style="margin-top:0">A ogni beep si va all'estremità opposta, prima del beep successivo; ogni livello è più veloce.
+      <b>Con luci</b>: ogni atleta ha la sua corsia con 2 luci (A e B), il controllo è automatico.
+      <b>A mano</b> (senza luci): l'atleta segue i beep del telefono e premi "Fuori" quando si ferma.</p>
+    <h3>Atleti</h3>
+    <div id="btPeople"></div>
+    <div class="row" style="margin-top:8px"><button id="btAdd">+ Aggiungi atleta</button></div>
+    <div class="row" style="margin-top:12px">
+      <label>Distanza sensore <select id="btDist" class="distSel" data-def="40"></select></label>
       <label>Fine dopo <select id="btFails" data-save><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select> mancati di fila</label>
     </div>
     <div class="row" style="margin-top:10px">
       <label>Livello iniziale <select id="btStartLvl" data-save></select></label>
-      <label style="flex:1">Atleta <input id="btAthlete" list="spAthletes" placeholder="facoltativo" style="flex:1;min-width:0"></label>
     </div>
     <div class="big-num" id="btLevel">–</div>
     <div class="sub" id="btSub">Pronto</div>
@@ -243,9 +247,16 @@
       <button class="primary" id="btGo" style="flex:1">Avvia</button>
       <button id="btStop" style="flex:1">Ferma</button>
     </div>
+    <div id="btLive"></div>
     <div id="btResult"></div>
-    <h3>Storico beep test</h3>
+  </section>
+
+  <section data-panel="beep" hidden>
+    <h2>Storico beep test</h2>
     <div id="btHistory"><p class="hint">Nessun test.</p></div>
+    <div class="row" style="margin-top:10px">
+      <button id="btPdfAll" style="flex:1">PDF di tutto lo storico</button>
+    </div>
   </section>
 
   <section data-panel="simon" hidden>
@@ -759,84 +770,247 @@ const btSpeed = lvl => 8.0 + 0.5 * lvl;                 // km/h al livello (1 = 
 const btVo2 = lvl => Math.max(0, -24.4 + 6.0 * btSpeed(lvl)); // Léger & Lambert: stima VO2max adulti
 let btHistory = [];
 try { btHistory = JSON.parse(localStorage.getItem('fitlight_beep') || '[]'); } catch (e) {}
-const saveBt = () => { try { localStorage.setItem('fitlight_beep', JSON.stringify(btHistory.slice(0, 200))); } catch (e) {} };
+const saveBt = () => { try { localStorage.setItem('fitlight_beep', JSON.stringify(btHistory.slice(0, 500))); } catch (e) {} };
+// Partecipanti: { name, A, B }  (A/B = indice luce, -1 = manuale)
+let btPeople = [];
+try { btPeople = JSON.parse(localStorage.getItem('fitlight_bt_people') || '[]'); } catch (e) {}
+if (!btPeople.length) btPeople = [{ name: '', A: -2, B: -2 }];   // -2 = da impostare automaticamente
+const savePeople = () => { try { localStorage.setItem('fitlight_bt_people', JSON.stringify(btPeople)); } catch (e) {} };
+const isManual = p => p.A < 0 || p.B < 0;
+
+function btValidate() {
+  if (!btPeople.length) return 'Aggiungi almeno un atleta';
+  const used = new Set();
+  for (const [k, p] of btPeople.entries()) {
+    if (isManual(p)) continue;
+    const who = p.name || `atleta ${k + 1}`;
+    if (p.A === p.B) return `${who}: luce A e B devono essere diverse`;
+    if (!lights.has(p.A) || !lights.has(p.B)) return `${who}: luce non collegata`;
+    if (used.has(p.A) || used.has(p.B)) return `${who}: una luce è già usata da un altro atleta`;
+    used.add(p.A); used.add(p.B);
+  }
+  return null;
+}
 
 async function runBeepTest() {
-  const A = +$('btA').value, B = +$('btB').value;
-  if (!lights.has(A) || !lights.has(B) || A === B) return log('Beep test: scegli due luci diverse');
+  const err = btValidate();
+  if (err) return log('Beep test: ' + err);
   const failsMax = +$('btFails').value, startLvl = +$('btStartLvl').value;
   const opts = { distance: $('btDist').value, beep: true };
-  beep = { stop: false, level: startLvl, shuttle: 0, lastOk: null, laps: 0, okLaps: 0, phase: 'countdown' };
+  const testId = String(Date.now());
+  beep = {
+    stop: false, level: startLvl, shuttle: 0, phase: 'countdown', testId, failsMax, startLvl, lastDone: null,
+    people: btPeople.map((p, k) => ({ name: p.name.trim() || `Atleta ${k + 1}`, A: p.A, B: p.B, manual: isManual(p), fails: 0, out: false, lastOk: null, okLaps: 0, res: null })),
+  };
   render();
-  log(`Beep test avviato: luce ${A + 1} ↔ luce ${B + 1}, dal livello ${startLvl}`);
-  // conto alla rovescia: 3 beep brevi + luce A bianca
-  setColor(A, 'white');
+  log(`Beep test avviato: ${beep.people.length} atlet${beep.people.length === 1 ? 'a' : 'i'}, dal livello ${startLvl}`);
+  const lanes = beep.people.filter(p => !p.manual);
+  for (const p of lanes) setColor(p.A, 'white');
   for (let k = 3; k > 0 && !beep.stop; k--) { $('btSub').textContent = `Parti tra ${k}…`; tone(800, 120); await sleep(1000); }
-  setColor(A, 'off');
-  if (beep.stop) return endBeepTest();
+  for (const p of lanes) setColor(p.A, 'off');
+  if (beep.stop) return endBeepTest(false);
   tone(1200, 350); vibrate(200);
   beep.phase = 'running';
-  let fails = 0, lapIdx = 0, next = performance.now();
+  let lapIdx = 0, next = performance.now();
   outer:
   for (let L = startLvl; L <= BT_LAPS.length; L++) {
     const lapMs = BT_MS[L - 1];
     for (let sh = 1; sh <= BT_LAPS[L - 1]; sh++) {
       if (beep.stop) break outer;
-      beep.level = L; beep.shuttle = sh; beep.lapMs = lapMs; beep.lapStart = next; render();
-      const dest = lapIdx % 2 === 0 ? B : A;
+      beep.level = L; beep.shuttle = sh; beep.lapMs = lapMs; render();
       const deadline = next + lapMs;
-      const r = await Promise.race([armAndWait(dest, BT_COLORS[(L - 1) % BT_COLORS.length], lapMs, opts), sleep(lapMs + 400).then(() => null)]);
-      const ok = r && !r.missed && r.tEvent <= deadline + 150;
-      beep.laps++; lapIdx++;
-      if (ok) { fails = 0; beep.okLaps++; beep.lastOk = { level: L, shuttle: sh }; }
-      else { fails++; log(`Beep test: navetta mancata (livello ${L}-${sh}) ${fails}/${failsMax}`); vibrate([80, 60, 80]); }
-      // aspetta il beep (fine navetta) senza accumulare ritardi
+      const active = beep.people.filter(p => !p.out);
+      // arma la luce di arrivo di ogni corsia attiva
+      const checks = active.filter(p => !p.manual).map(p => {
+        const dest = lapIdx % 2 === 0 ? p.B : p.A;
+        return Promise.race([armAndWait(dest, BT_COLORS[(L - 1) % BT_COLORS.length], lapMs, opts), sleep(lapMs + 400).then(() => null)])
+          .then(r => ({ p, ok: !!(r && !r.missed && r.tEvent <= deadline + 150) }));
+      });
+      const outcomes = await Promise.all(checks);
       const wait = deadline - performance.now();
       if (wait > 0) await sleep(wait);
-      next = deadline;
+      next = deadline; lapIdx++;
       if (beep.stop) break outer;
+      for (const { p, ok } of outcomes) {
+        if (p.out) continue;
+        if (ok) { p.fails = 0; p.okLaps++; p.lastOk = { level: L, shuttle: sh }; }
+        else {
+          p.fails++; vibrate([80, 60, 80]);
+          log(`${p.name}: navetta mancata (${L}-${sh}) ${p.fails}/${failsMax}`);
+          if (p.fails >= failsMax) btEliminate(p, `${p.fails} mancati di fila`);
+        }
+      }
+      for (const p of beep.people) if (p.manual && !p.out) { p.okLaps++; p.lastOk = { level: L, shuttle: sh }; }
+      beep.lastDone = { level: L, shuttle: sh };
+      render();
+      if (!beep.people.some(p => !p.out)) break outer;
       const levelUp = sh === BT_LAPS[L - 1];
       if (levelUp) { tone(1000, 140); tone(1000, 140, 0.2); tone(1400, 250, 0.4); } else tone(1000, 220);
-      if (fails >= failsMax) break outer;
     }
   }
   endBeepTest(!beep.stop);
+}
+const btResultOf = p => p.lastOk ? { level: p.lastOk.level, shuttle: p.lastOk.shuttle, distance: p.okLaps * 20, vo2: Math.round(btVo2(p.lastOk.level) * 10) / 10 } : null;
+function btEliminate(p, why) {
+  if (!beep || p.out) return;
+  p.out = true;
+  p.res = btResultOf(p);
+  log(`${p.name} fuori${why ? ' (' + why + ')' : ''}: ${p.res ? p.res.level + '-' + p.res.shuttle + ', ' + p.res.distance + ' m' : 'nessuna navetta'}`);
+  if (!p.manual) { setColor(p.A, 'red'); setColor(p.B, 'red'); setTimeout(() => { setColor(p.A, 'off'); setColor(p.B, 'off'); }, 1500); }
+  render();
 }
 function endBeepTest(finished) {
   const b = beep;
   cancelWaiters();
   for (const i of lights.keys()) setColor(i, 'off');
   beep = null;
-  if (finished && b && b.lastOk) {
-    const res = { when: new Date().toISOString(), athlete: $('btAthlete').value.trim(), level: b.lastOk.level, shuttle: b.lastOk.shuttle,
-                  distance: b.okLaps * 20, vo2: Math.round(btVo2(b.lastOk.level) * 10) / 10 };
-    btHistory.unshift(res); saveBt();
-    log(`Beep test: livello ${res.level}-${res.shuttle}, ${res.distance} m, VO2max stimato ${res.vo2}`);
-    $('btResult').innerHTML = `<table><tr><th>Risultato</th><th class="num">${res.level}-${res.shuttle}</th></tr>` +
-      `<tr><td>Distanza</td><td class="num">${res.distance} m</td></tr><tr><td>Velocità finale</td><td class="num">${btSpeed(res.level).toFixed(1)} km/h</td></tr>` +
-      `<tr><td>VO2max stimato*</td><td class="num">${res.vo2} ml/kg/min</td></tr></table><p class="hint">*Stima (formula Léger &amp; Lambert, adulti): solo indicativa.</p>`;
+  if (!b) return render();
+  if (finished) {
+    for (const p of b.people) if (!p.out) { p.out = true; p.res = btResultOf(p); }   // arrivati alla fine della tabella
+    const when = new Date().toISOString();
+    const rows = b.people.filter(p => p.res).map(p => ({ when, testId: b.testId, athlete: p.name, manual: p.manual, failsMax: b.failsMax, startLvl: b.startLvl, ...p.res }));
+    btHistory.unshift(...rows.sort((x, y) => y.distance - x.distance)); saveBt();
+    lastBtTest = b.testId;
     tone(600, 600);
-  } else if (finished) { log('Beep test terminato senza navette completate'); }
+    log(`Beep test finito: ${rows.length} risultat${rows.length === 1 ? 'o' : 'i'} salvat${rows.length === 1 ? 'o' : 'i'}`);
+  } else log('Beep test fermato: risultati non salvati');
   render();
 }
+let lastBtTest = null;
+
+const btTests = () => {   // storico raggruppato per test
+  const map = new Map();
+  for (const r of btHistory) { const id = r.testId || r.when; if (!map.has(id)) map.set(id, []); map.get(id).push(r); }
+  return [...map.entries()].map(([id, rows]) => ({ id, when: rows[0].when, rows: rows.slice().sort((a, b) => b.distance - a.distance) }));
+};
+
 function renderBeep() {
   const ids = [...lights.keys()].sort((a, b) => a - b);
-  fillLightSelect($('btA'), ids, ids[0]); fillLightSelect($('btB'), ids, ids[ids.length - 1]);
-  $('btGo').disabled = busy() || ids.length < 2 || $('btA').value === $('btB').value;
+  // auto-assegna le luci al primo atleta se non impostate
+  for (const [k, p] of btPeople.entries()) if (p.A === -2 && ids.length >= 2) {
+    const a = ids[k * 2], b = ids[k * 2 + 1];
+    if (a != null && b != null) { p.A = a; p.B = b; } else { p.A = -1; p.B = -1; }
+  }
+  const running = !!beep;
+  // --- elenco atleti (configurazione) ---
+  if (!running) {
+    const opt = (sel) => `<option value="-1"${sel === -1 ? ' selected' : ''}>a mano</option>` + ids.map(i => `<option value="${i}"${sel === i ? ' selected' : ''}>Luce ${i + 1}</option>`).join('');
+    const html = '<table><tr><th>Atleta</th><th>Luce A</th><th>Luce B</th><th></th></tr>' + btPeople.map((p, k) =>
+      `<tr><td><input data-bp="${k}" data-f="name" value="${esc(p.name)}" placeholder="Atleta ${k + 1}" list="spAthletes"></td>` +
+      `<td><select data-bp="${k}" data-f="A">${opt(p.A)}</select></td><td><select data-bp="${k}" data-f="B">${opt(p.B)}</select></td>` +
+      `<td class="num"><button data-bprm="${k}" style="padding:2px 9px"${btPeople.length < 2 ? ' disabled' : ''}>×</button></td></tr>`).join('') + '</table>';
+    if (document.activeElement?.dataset?.bp == null && $('btPeople').innerHTML !== html) {
+      $('btPeople').innerHTML = html;
+      $('btPeople').querySelectorAll('[data-bp]').forEach(el => {
+        const k = +el.dataset.bp, f = el.dataset.f;
+        el.onchange = el.oninput = () => {
+          btPeople[k][f] = f === 'name' ? el.value : +el.value;
+          if (f !== 'name' && +el.value === -1) { btPeople[k].A = -1; btPeople[k].B = -1; }
+          savePeople(); if (f !== 'name') render();
+        };
+        el.onblur = () => render();
+      });
+      $('btPeople').querySelectorAll('[data-bprm]').forEach(b => b.onclick = () => { btPeople.splice(+b.dataset.bprm, 1); savePeople(); render(); });
+    }
+  }
+  $('btPeople').hidden = running; $('btAdd').hidden = running;
+  const err = btValidate();
+  $('btGo').disabled = busy() || !!err;
   $('btStop').disabled = !beep;
-  for (const el of ['btA', 'btB', 'btDist', 'btFails', 'btStartLvl', 'btAthlete']) $(el).disabled = !!beep;
+  for (const el of ['btDist', 'btFails', 'btStartLvl']) $(el).disabled = running;
+  // --- stato in corsa ---
   if (beep && beep.phase === 'running') {
     $('btLevel').textContent = `${beep.level} – ${beep.shuttle}`;
     $('btSub').textContent = `Livello ${beep.level}, navetta ${beep.shuttle}/${BT_LAPS[beep.level - 1]} · ${btSpeed(beep.level).toFixed(1)} km/h · ${(beep.lapMs / 1000).toFixed(2)} s`;
   } else if (!beep) {
-    $('btLevel').textContent = btHistory[0] ? `${btHistory[0].level} – ${btHistory[0].shuttle}` : '–';
-    $('btSub').textContent = ids.length < 2 ? 'Servono 2 luci collegate' : 'Pronto';
+    $('btLevel').textContent = '–';
+    $('btSub').textContent = err && lights.size ? err : (lights.size || btPeople.every(isManual) ? 'Pronto' : 'Collega le luci');
   }
-  $('btHistory').innerHTML = btHistory.length ? '<table><tr><th>Data</th><th>Atleta</th><th class="num">Livello</th><th class="num">m</th><th class="num">VO2*</th><th></th></tr>' +
-    btHistory.map((r, i) => `<tr><td>${fmtDate(r.when)}</td><td>${esc(r.athlete) || '–'}</td><td class="num"><b>${r.level}-${r.shuttle}</b></td><td class="num">${r.distance}</td><td class="num">${r.vo2}</td>` +
-      `<td class="num"><button data-btdel="${i}" style="padding:2px 9px">×</button></td></tr>`).join('') + '</table>' : '<p class="hint">Nessun test.</p>';
-  $('btHistory').querySelectorAll('[data-btdel]').forEach(b => b.onclick = () => { if (confirm('Eliminare questo test?')) { btHistory.splice(+b.dataset.btdel, 1); saveBt(); render(); } });
+  if (beep) {
+    $('btLive').innerHTML = '<table><tr><th>Atleta</th><th>Stato</th><th class="num">m</th><th></th></tr>' + beep.people.map((p, k) =>
+      `<tr><td>${esc(p.name)}${p.manual ? ' <small class="hint">(manuale)</small>' : ''}</td>` +
+      `<td>${p.out ? `<b>Fuori ${p.res ? p.res.level + '-' + p.res.shuttle : '–'}</b>` : (p.fails ? '⚠️'.repeat(p.fails) + ' in corsa' : 'in corsa')}</td>` +
+      `<td class="num">${p.okLaps * 20}</td>` +
+      `<td class="num">${p.out ? '' : `<button data-btout="${k}" style="padding:4px 10px">Fuori</button>`}</td></tr>`).join('') + '</table>';
+    $('btLive').querySelectorAll('[data-btout]').forEach(b => b.onclick = () => btEliminate(beep.people[+b.dataset.btout], 'fermato dall\'allenatore'));
+  } else $('btLive').innerHTML = '';
+  // --- risultato ultimo test ---
+  const last = lastBtTest && btTests().find(t => t.id === lastBtTest);
+  $('btResult').innerHTML = !beep && last ? '<h3>Risultato</h3><table><tr><th>#</th><th>Atleta</th><th class="num">Livello</th><th class="num">m</th><th class="num">km/h</th><th class="num">VO2*</th></tr>' +
+    last.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.athlete)}</td><td class="num"><b>${r.level}-${r.shuttle}</b></td><td class="num">${r.distance}</td><td class="num">${btSpeed(r.level).toFixed(1)}</td><td class="num">${r.vo2}</td></tr>`).join('') +
+    `</table><p class="hint">*VO2max stimato (Léger &amp; Lambert, adulti): indicativo.</p><div class="row"><button class="primary" id="btPdfLast" style="flex:1">Scarica PDF</button>${navigator.share ? '<button id="btShareLast" style="flex:1">Condividi</button>' : ''}</div>` : '';
+  if ($('btPdfLast')) $('btPdfLast').onclick = () => exportBtPdf([last], false);
+  if ($('btShareLast')) $('btShareLast').onclick = () => exportBtPdf([last], true);
+  // --- storico per test ---
+  const tests = btTests();
+  $('btHistory').innerHTML = tests.length ? '<table><tr><th>Test</th><th>Atleti</th><th></th></tr>' + tests.map(t =>
+    `<tr><td>${fmtDate(t.when)}</td><td>${t.rows.map(r => `${esc(r.athlete)} <b>${r.level}-${r.shuttle}</b>`).join('<br>')}</td>` +
+    `<td class="num" style="white-space:nowrap"><button data-btpdf="${t.id}" style="padding:4px 9px">PDF</button> <button data-btdel="${t.id}" style="padding:4px 9px">×</button></td></tr>`).join('') + '</table>'
+    : '<p class="hint">Nessun test.</p>';
+  $('btHistory').querySelectorAll('[data-btpdf]').forEach(b => b.onclick = () => exportBtPdf([btTests().find(t => t.id === b.dataset.btpdf)], false));
+  $('btHistory').querySelectorAll('[data-btdel]').forEach(b => b.onclick = () => {
+    if (confirm('Eliminare questo test e i suoi risultati?')) { btHistory = btHistory.filter(r => (r.testId || r.when) !== b.dataset.btdel); saveBt(); render(); }
+  });
+  $('btPdfAll').disabled = !tests.length;
 }
+
+async function exportBtPdf(tests, share) {
+  tests = tests.filter(Boolean);
+  if (!tests.length) return;
+  try {
+    const { jsPDF } = await loadJsPdf();
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const W = 210, M = 14;
+    let y = 18;
+    const newPage = h => { if (y + h > 282) { doc.addPage(); y = 18; } };
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
+    doc.text(tests.length > 1 ? 'FITLIGHT - Storico beep test' : 'FITLIGHT - Beep test', M, y); y += 7;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(100);
+    doc.text('Test navetta 20 m a livelli (21 livelli, da 8,5 km/h, +0,5 km/h per livello).', M, y); y += 8;
+    doc.setTextColor(0);
+    const cols = [{ h: '#', x: M + 1 }, { h: 'Atleta', x: M + 9 }, { h: 'Livello', x: M + 88, r: true }, { h: 'Distanza m', x: M + 115, r: true },
+                  { h: 'Vel. km/h', x: M + 140, r: true }, { h: 'VO2max*', x: M + 162, r: true }, { h: 'Rilev.', x: M + 166 }];
+    for (const t of tests) {
+      newPage(30);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
+      doc.text(`Test del ${fmtDate(t.when)}`, M, y); y += 5;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(100);
+      const r0 = t.rows[0];
+      doc.text(`Atleti: ${t.rows.length}` + (r0.startLvl ? `   Livello iniziale: ${r0.startLvl}` : '') + (r0.failsMax ? `   Fine dopo ${r0.failsMax} mancati di fila` : ''), M, y); y += 6;
+      doc.setTextColor(0); doc.setFontSize(10);
+      doc.setFillColor(242, 244, 247); doc.rect(M, y - 4.5, W - 2 * M, 6.5, 'F');
+      doc.setFont('helvetica', 'bold');
+      cols.forEach(c => doc.text(c.h, c.x, y, c.r ? { align: 'right' } : undefined)); y += 6.5;
+      doc.setFont('helvetica', 'normal');
+      t.rows.forEach((r, i) => {
+        newPage(7);
+        const v = [String(i + 1), pdfSafe(r.athlete), `${r.level}-${r.shuttle}`, String(r.distance), btSpeed(r.level).toFixed(1), String(r.vo2), r.manual ? 'manuale' : 'luci'];
+        if (i === 0 && t.rows.length > 1) doc.setFont('helvetica', 'bold');
+        cols.forEach((c, k) => doc.text(k === 1 ? (doc.splitTextToSize(v[k], 70)[0] || '') : v[k], c.x, y, c.r ? { align: 'right' } : undefined));
+        doc.setFont('helvetica', 'normal');
+        y += 6.5; doc.setDrawColor(220); doc.line(M, y - 4.5, W - M, y - 4.5);
+      });
+      y += 6;
+    }
+    newPage(12);
+    doc.setFontSize(8); doc.setTextColor(110);
+    doc.text('Livello = ultima navetta completata (livello-navetta).  *VO2max stimato con la formula di Léger & Lambert (adulti): solo indicativo.', M, y);
+    const pages = doc.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i); doc.setFontSize(8); doc.setTextColor(140);
+      doc.text(`Generato con FITLIGHT web - ${new Date().toLocaleString('it-IT')}`, M, 290);
+      doc.text(`${i}/${pages}`, W - M, 290, { align: 'right' });
+    }
+    const d = new Date(tests[0].when);
+    const fname = (tests.length > 1 ? 'FITLIGHT_Beep_test_storico' : `FITLIGHT_Beep_test_${d.toLocaleDateString('it-IT').replace(/\//g, '-')}_${d.getHours()}h${String(d.getMinutes()).padStart(2, '0')}`) + '.pdf';
+    if (share && navigator.share) {
+      const file = new File([doc.output('blob')], fname, { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'Beep test' }); return; }
+    }
+    doc.save(fname); log('PDF salvato: ' + fname);
+  } catch (e) { if (e.name !== 'AbortError') log('Errore PDF: ' + e.message); }
+}
+
 const selKeys = new WeakMap();
 function fillLightSelect(sel, ids, def) {
   const key = ids.join(',');
@@ -1282,6 +1456,8 @@ $('spCancel').onclick = () => { if (sprint) { sprint.stop = true; cancelWaiters(
 $('sesName').oninput = () => { curSession().name = $('sesName').value || 'Sessione'; saveSessions(); };
 $('sesName').onchange = () => render();
 $('btGo').onclick = () => { if (!busy()) { tone(1, 1); runBeepTest(); } };
+$('btAdd').onclick = () => { btPeople.push({ name: '', A: -1, B: -1 }); savePeople(); render(); };
+$('btPdfAll').onclick = () => exportBtPdf(btTests(), false);
 $('btStop').onclick = () => { if (beep) { beep.stop = true; cancelWaiters(); log('Beep test fermato'); } };
 $('smGo').onclick = () => { if (!busy()) { tone(1, 1); runSimon(); } };
 $('smStop').onclick = () => { if (simon) { simon.stop = true; cancelWaiters(); log('Simon fermato'); } };
