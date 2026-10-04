@@ -1,6 +1,7 @@
 // Salva l'app sul telefono per usarla senza internet. Cambia VERSION a ogni aggiornamento.
-const VERSION = 'fitlight-v2';
-const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
+const VERSION = 'fitlight-v3';
+const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png',
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

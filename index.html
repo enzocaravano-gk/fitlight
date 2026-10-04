@@ -142,6 +142,10 @@
       <label><input type="checkbox" id="spBeep" checked style="width:20px;height:20px"> Beep</label>
     </div>
     <p class="hint" id="spReflHint" hidden>Riflettore: metti un catarifrangente davanti a ogni luce; scatta quando il corpo interrompe il fascio, come una fotocellula.</p>
+    <div class="row" style="margin-top:12px">
+      <label style="flex:1">Atleta <input id="spAthlete" list="spAthletes" placeholder="facoltativo" style="flex:1;min-width:0"></label>
+      <datalist id="spAthletes"></datalist>
+    </div>
     <div class="timer" id="spTimer">0.00</div>
     <div class="phase" id="spPhase">Scegli le luci e premi Pronti</div>
     <div class="row">
@@ -149,9 +153,25 @@
       <button id="spCancel" style="flex:1">Annulla</button>
     </div>
     <div id="spLast"></div>
-    <h3>Storico</h3>
-    <div id="spHistory"><p class="hint">Nessuna prova.</p></div>
-    <div class="row" style="margin-top:10px"><button id="spClear">Cancella storico</button></div>
+  </section>
+
+  <section data-panel="sprint" hidden>
+    <h2>Sessione</h2>
+    <label>Nome <input id="sesName" style="flex:1;min-width:0"></label>
+    <div id="sesRuns" style="margin-top:10px"></div>
+    <div id="sesSummary"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="sesPdf" style="flex:1">Scarica PDF</button>
+      <button id="sesShare" style="flex:1">Condividi</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="sesNew" style="flex:1">Nuova sessione</button>
+    </div>
+  </section>
+
+  <section data-panel="sprint" hidden>
+    <h2>Archivio sessioni</h2>
+    <div id="sesArchive"><p class="hint">Nessuna sessione precedente.</p></div>
   </section>
 
   <section data-panel="tools" hidden>
@@ -500,10 +520,45 @@ function stopDrill() {
 
 /* ---------- Sprint ---------- */
 let spMidOrder = [];
-let spHistory = [];
-try { spHistory = JSON.parse(localStorage.getItem('fitlight_sprint') || '[]'); } catch (e) { spHistory = []; }
-function saveHistory() { try { localStorage.setItem('fitlight_sprint', JSON.stringify(spHistory.slice(0, 100))); } catch (e) {} }
 const fmt = ms => (ms / 1000).toFixed(2);
+const fmtDate = iso => new Date(iso).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const fmtTime = iso => new Date(iso).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* Sessioni: ciascuna contiene più corse. Salvate sul telefono. */
+let sessions = [], curSesId = null;
+try { sessions = JSON.parse(localStorage.getItem('fitlight_sessions') || '[]'); curSesId = localStorage.getItem('fitlight_cur_session'); } catch (e) { sessions = []; }
+try {  // vecchio storico -> sessione "Prove precedenti"
+  const old = JSON.parse(localStorage.getItem('fitlight_sprint') || '[]');
+  if (old.length) {
+    sessions.push({ id: 'old', name: 'Prove precedenti', created: new Date().toISOString(),
+      runs: old.reverse().map(r => ({ athlete: '', when: new Date().toISOString(), total: r.total, splits: r.splits, missedMids: r.missedMids || 0 })) });
+    localStorage.removeItem('fitlight_sprint');
+  }
+} catch (e) {}
+function saveSessions() {
+  try { localStorage.setItem('fitlight_sessions', JSON.stringify(sessions)); localStorage.setItem('fitlight_cur_session', curSesId || ''); } catch (e) {}
+}
+function newSession() {
+  const now = new Date();
+  const s = { id: String(now.getTime()), name: 'Sprint ' + now.toLocaleDateString('it-IT') + ' ' + now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+              created: now.toISOString(), runs: [] };
+  sessions.unshift(s); curSesId = s.id; saveSessions();
+  $('sesName').value = s.name;
+  return s;
+}
+function curSession() { return sessions.find(s => s.id === curSesId) || newSession(); }
+function courseLabel(c) {
+  if (!c) return '';
+  return `start luce ${c.start}` + (c.mids.length ? ` > intermedi luci ${c.mids.join(', ')}` : '') + ` > arrivo luce ${c.stop}` +
+         ` (sensore: ${c.distance === 'refl' ? 'riflettore' : c.distance + ' cm'})`;
+}
+function athleteStats(runs) {
+  const by = new Map();
+  for (const r of runs) { const k = r.athlete || '—'; if (!by.has(k)) by.set(k, []); by.get(k).push(r.total); }
+  return [...by.entries()].map(([name, t]) => ({ name, n: t.length, best: Math.min(...t), avg: t.reduce((a, b) => a + b, 0) / t.length }))
+    .sort((a, b) => a.best - b.best);
+}
 
 async function runSprint() {
   const startIdx = +$('spStart').value, stopIdx = +$('spStop').value;
@@ -538,9 +593,10 @@ async function runSprint() {
   await sleep(50);
   const total = rs.tEvent - sprint.t0;
   const splits = sprint.splits.filter(s => !s.isStop).sort((a, b) => a.t - b.t);
-  const run = { when: new Date().toLocaleString('it-IT'), total, splits: splits.map(s => ({ light: s.light, t: s.t })),
-                missedMids: mids.length - splits.length };
-  spHistory.unshift(run); saveHistory();
+  const run = { athlete: $('spAthlete').value.trim(), when: new Date().toISOString(), total,
+                splits: splits.map(s => ({ light: s.light, t: s.t })), missedMids: mids.length - splits.length,
+                course: { start: startIdx + 1, stop: stopIdx + 1, mids: mids.map(i => i + 1), distance: opts.distance } };
+  curSession().runs.push(run); saveSessions();
   log(`Sprint: ${fmt(total)} s`);
   endSprint(run);
 }
@@ -565,12 +621,152 @@ function renderSprintResult(run) {
   $('spLast').innerHTML = `<table><tr><th>Punto</th><th class="num">Tempo s</th><th class="num">Parziale</th></tr>${rows}</table>` +
     (run.missedMids ? `<p class="hint">${run.missedMids} intermedi non rilevati.</p>` : '');
 }
-function renderHistory() {
-  if (!spHistory.length) { $('spHistory').innerHTML = '<p class="hint">Nessuna prova.</p>'; return; }
-  const best = Math.min(...spHistory.map(r => r.total));
-  $('spHistory').innerHTML = '<table><tr><th>#</th><th>Quando</th><th class="num">Intermedi</th><th class="num">Totale s</th></tr>' +
-    spHistory.map((r, i) => `<tr><td>${spHistory.length - i}</td><td>${r.when}</td><td class="num">${r.splits.map(s => fmt(s.t)).join(' · ') || '–'}</td>` +
-      `<td class="num">${r.total === best ? '<b>' + fmt(r.total) + ' ★</b>' : fmt(r.total)}</td></tr>`).join('') + '</table>';
+function renderSessions() {
+  const ses = curSession();
+  if (document.activeElement !== $('sesName')) $('sesName').value = ses.name;
+  const runs = ses.runs;
+  if (!runs.length) { $('sesRuns').innerHTML = '<p class="hint">Nessuna corsa in questa sessione.</p>'; $('sesSummary').innerHTML = ''; }
+  else {
+    const best = Math.min(...runs.map(r => r.total));
+    $('sesRuns').innerHTML = '<table><tr><th>#</th><th>Atleta</th><th class="num">Intermedi</th><th class="num">Totale s</th><th></th></tr>' +
+      runs.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.athlete) || '–'}</td><td class="num">${r.splits.map(s => fmt(s.t)).join(' · ') || '–'}</td>` +
+        `<td class="num">${r.total === best ? '<b>' + fmt(r.total) + ' ★</b>' : fmt(r.total)}</td>` +
+        `<td class="num"><button data-del="${i}" style="padding:2px 9px" title="Elimina corsa">×</button></td></tr>`).join('') + '</table>';
+    const st = athleteStats(runs);
+    $('sesSummary').innerHTML = st.length > 1 || st[0].name !== '—'
+      ? '<h3>Per atleta</h3><table><tr><th>Atleta</th><th class="num">Corse</th><th class="num">Migliore</th><th class="num">Media</th></tr>' +
+        st.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.n}</td><td class="num">${fmt(a.best)}</td><td class="num">${fmt(a.avg)}</td></tr>`).join('') + '</table>'
+      : '';
+    $('sesRuns').querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      if (confirm('Eliminare questa corsa?')) { ses.runs.splice(+b.dataset.del, 1); saveSessions(); render(); }
+    });
+  }
+  $('sesPdf').disabled = $('sesShare').disabled = !runs.length;
+  $('sesShare').hidden = !navigator.share;
+  const names = [...new Set(sessions.flatMap(x => x.runs.map(r => r.athlete)).filter(Boolean))];
+  const dl = names.map(n => `<option value="${esc(n)}">`).join('');
+  if ($('spAthletes').innerHTML !== dl) $('spAthletes').innerHTML = dl;
+
+  const others = sessions.filter(x => x.id !== ses.id);
+  $('sesArchive').innerHTML = others.length ? '<table><tr><th>Sessione</th><th class="num">Corse</th><th></th></tr>' +
+    others.map(x => `<tr><td>${esc(x.name)}<br><small class="hint">${fmtDate(x.created)}</small></td><td class="num">${x.runs.length}</td>` +
+      `<td class="num" style="white-space:nowrap"><button data-pdf="${x.id}" style="padding:4px 9px">PDF</button> ` +
+      `<button data-open="${x.id}" style="padding:4px 9px">Apri</button> <button data-rm="${x.id}" style="padding:4px 9px">×</button></td></tr>`).join('') + '</table>'
+    : '<p class="hint">Nessuna sessione precedente.</p>';
+  $('sesArchive').querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => exportPdf(sessions.find(x => x.id === b.dataset.pdf), false));
+  $('sesArchive').querySelectorAll('[data-open]').forEach(b => b.onclick = () => { curSesId = b.dataset.open; saveSessions(); $('sesName').value = curSession().name; render(); });
+  $('sesArchive').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
+    if (confirm('Eliminare questa sessione e tutte le sue corse?')) { sessions = sessions.filter(x => x.id !== b.dataset.rm); saveSessions(); render(); }
+  });
+}
+
+/* ---------- PDF (jsPDF, salvato in cache per l'uso offline) ---------- */
+const JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+function loadJsPdf() {
+  if (window.jspdf) return Promise.resolve(window.jspdf);
+  return new Promise((res, rej) => {
+    const sc = document.createElement('script'); sc.src = JSPDF_URL;
+    sc.onload = () => res(window.jspdf); sc.onerror = () => rej(new Error('libreria PDF non disponibile (serve internet la prima volta)'));
+    document.head.appendChild(sc);
+  });
+}
+const pdfSafe = t => String(t ?? '').replace(/[\u2013\u2014]/g, '-').replace(/[^\x20-\x7E\u00A0-\u00FF]/g, '');
+async function buildPdf(ses) {
+  const { jsPDF } = await loadJsPdf();
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const W = 210, M = 14;
+  let y = 18;
+  const line = (yy) => { doc.setDrawColor(220); doc.line(M, yy, W - M, yy); };
+  const newPageIfNeeded = (h) => { if (y + h > 282) { doc.addPage(); y = 18; } };
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.text('FITLIGHT - Sessione sprint', M, y); y += 8;
+  doc.setFontSize(13); doc.text(doc.splitTextToSize(pdfSafe(ses.name), W - 2 * M), M, y); y += 7;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(100);
+  const runs = ses.runs;
+  doc.text(`Data: ${fmtDate(ses.created)}    Corse: ${runs.length}`, M, y); y += 5;
+  const courses = [...new Set(runs.map(r => courseLabel(r.course)).filter(Boolean))];
+  for (const c of courses) { doc.text(doc.splitTextToSize('Percorso: ' + c, W - 2 * M), M, y); y += 5; }
+  doc.setTextColor(0); y += 3;
+
+  // Tabella corse
+  const maxMids = Math.max(0, ...runs.map(r => r.splits.length));
+  const cols = [{ h: '#', w: 9 }, { h: 'Atleta', w: 38 }, { h: 'Ora', w: 18 }];
+  for (let k = 0; k < maxMids; k++) cols.push({ h: `Int. ${k + 1}`, w: 0, num: true });
+  cols.push({ h: 'Totale s', w: maxMids ? 32 : 22, num: true });
+  const fixed = cols.reduce((a, c) => a + c.w, 0);
+  const flex = cols.filter(c => !c.w);
+  flex.forEach(c => c.w = Math.max(16, (W - 2 * M - fixed) / flex.length));
+  const best = runs.length ? Math.min(...runs.map(r => r.total)) : 0;
+  const drawRow = (vals, bold, fill) => {
+    newPageIfNeeded(8);
+    if (fill) { doc.setFillColor(242, 244, 247); doc.rect(M, y - 4.5, W - 2 * M, 6.5, 'F'); }
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    let x = M;
+    cols.forEach((c, i) => {
+      const v = String(vals[i] ?? '');
+      if (c.num) doc.text(v, x + c.w - 1.5, y, { align: 'right' }); else doc.text(doc.splitTextToSize(v, c.w - 2)[0] || '', x + 1, y);
+      x += c.w;
+    });
+    y += 6.5;
+  };
+  doc.setFontSize(10);
+  drawRow(cols.map(c => c.h), true, true);
+  runs.forEach((r, i) => {
+    const mids = []; let prev = 0;
+    for (let k = 0; k < maxMids; k++) {
+      const s = r.splits[k];
+      if (s) { mids.push(`${fmt(s.t)} (+${fmt(s.t - prev)})`); prev = s.t; } else mids.push('-');
+    }
+    const last = r.splits.length ? r.splits[r.splits.length - 1].t : null;
+    drawRow([i + 1, pdfSafe(r.athlete) || '-', fmtTime(r.when), ...mids,
+             fmt(r.total) + (last != null ? ` (+${fmt(r.total - last)})` : '') + (r.total === best ? ' *' : '')], r.total === best);
+    line(y - 4.5);
+  });
+  doc.setFontSize(8); doc.setTextColor(110);
+  newPageIfNeeded(6);
+  doc.text('Intermedi: tempo dalla partenza (parziale dal punto precedente).  * = miglior tempo della sessione.', M, y); y += 9;
+  doc.setTextColor(0);
+
+  // Riepilogo per atleta
+  const st = athleteStats(runs);
+  newPageIfNeeded(20);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text('Riepilogo', M, y); y += 7;
+  doc.setFontSize(10);
+  const sumCols = [{ h: 'Atleta', x: M + 1 }, { h: 'Corse', x: M + 90, r: true }, { h: 'Migliore s', x: M + 125, r: true }, { h: 'Media s', x: M + 160, r: true }];
+  doc.setFillColor(242, 244, 247); doc.rect(M, y - 4.5, W - 2 * M, 6.5, 'F');
+  sumCols.forEach(c => doc.text(c.h, c.x, y, c.r ? { align: 'right' } : undefined)); y += 6.5;
+  doc.setFont('helvetica', 'normal');
+  for (const a of st) {
+    newPageIfNeeded(7);
+    const vals = [a.name === '—' ? '-' : pdfSafe(a.name), String(a.n), fmt(a.best), fmt(a.avg)];
+    sumCols.forEach((c, i) => doc.text(vals[i], c.x, y, c.r ? { align: 'right' } : undefined));
+    y += 6.5; line(y - 4.5);
+  }
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i); doc.setFontSize(8); doc.setTextColor(140);
+    doc.text(`Generato con FITLIGHT web - ${new Date().toLocaleString('it-IT')}`, M, 290);
+    doc.text(`${i}/${pages}`, W - M, 290, { align: 'right' });
+  }
+  const fname = ('FITLIGHT ' + ses.name).replace(/[^\p{L}\p{N}\- ]+/gu, '-').replace(/\s+/g, '_') + '.pdf';
+  return { doc, fname };
+}
+async function exportPdf(ses, share) {
+  if (!ses || !ses.runs.length) return;
+  try {
+    const { doc, fname } = await buildPdf(ses);
+    if (share && navigator.share) {
+      const file = new File([doc.output('blob')], fname, { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: ses.name });
+        return;
+      }
+    }
+    doc.save(fname);
+    log('PDF salvato: ' + fname);
+  } catch (e) {
+    if (e.name !== 'AbortError') log('Errore PDF: ' + e.message);
+  }
 }
 
 // keep-alive e aggiornamento collegamenti
@@ -652,7 +848,11 @@ $('selNone').onclick = () => { if (!busy()) { selected.clear(); render(); } };
 $('selTouch').onclick = () => { if (selecting) endSelectByTouch(); else selectByTouch(); };
 $('spGo').onclick = () => { if (!busy()) runSprint(); };
 $('spCancel').onclick = () => { if (sprint) { sprint.stop = true; cancelWaiters(); log('Sprint annullato'); } };
-$('spClear').onclick = () => { if (confirm('Cancellare tutto lo storico sprint?')) { spHistory = []; saveHistory(); render(); } };
+$('sesName').oninput = () => { curSession().name = $('sesName').value || 'Sessione'; saveSessions(); };
+$('sesName').onchange = () => render();
+$('sesNew').onclick = () => { if (!sprint) { newSession(); render(); } };
+$('sesPdf').onclick = () => exportPdf(curSession(), false);
+$('sesShare').onclick = () => exportPdf(curSession(), true);
 
 let lastSprintKey = '';
 function renderSprintSetup() {
@@ -735,7 +935,7 @@ function render() {
   $('sMiss').textContent = results.length ? results.length - ok.length : '–';
   $('results').innerHTML = results.map(x => `<li>Luce ${x.light}: ${x.ms != null ? x.ms + ' ms' : 'mancato'}</li>`).join('');
   renderSprintSetup();
-  renderHistory();
+  renderSessions();
   $('log').textContent = logLines.join('\n');
 }
 
