@@ -399,13 +399,18 @@ function octopus(idx, op, payload = [], proclayer = 0) {
   return [idx, 0, 0, op, idx, proclayer, payload.length + 4, ...payload, octoSeq, 0, 0, 0];
 }
 
-/* ===================== USB (CDC su WebUSB) ===================== */
-let dev = null, epIn = 0, epOut = 0, rxBuf = [], txQueue = Promise.resolve(), expectingReset = false;
+/* ===================== Collegamento: WebUSB (Android) o Web Serial (Windows/Mac/Linux) ===================== */
+// Su Android la chiavetta è libera e si usa WebUSB. Sui computer il sistema la vede come porta seriale (COM):
+// lì si usa Web Serial, che parla con la porta attraverso il driver del sistema.
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const USE_SERIAL = !IS_ANDROID && 'serial' in navigator;
+let dev = null, rxBuf = [], txQueue = Promise.resolve(), expectingReset = false;
+const onBytes = bytes => { for (const b of bytes) rxBuf.push(b); parseRx(); };
 
-async function openDevice(d) {
+async function openDevice(d) {   // WebUSB
   await d.open();
   if (d.configuration === null) await d.selectConfiguration(1);
-  let commIf = null, dataIf = null;
+  let commIf = null, dataIf = null, epIn = 0, epOut = 0;
   for (const itf of d.configuration.interfaces) {
     const alt = itf.alternates[0];
     if (alt.interfaceClass === 2) commIf = itf.interfaceNumber;
@@ -425,26 +430,50 @@ async function openDevice(d) {
     } catch (e) { log('Nota: interfaccia di controllo non disponibile (' + e.message + ')'); }
   }
   await d.claimInterface(dataIf);
-  dev = d;
-  readLoop(d);
+  const t = { kind: 'usb', d, write: f => d.transferOut(epOut, f), close: () => d.close() };
+  dev = t;
+  (async () => {
+    while (dev === t) {
+      try {
+        const r = await d.transferIn(epIn, 64);
+        if (r.data && r.data.byteLength) onBytes(new Uint8Array(r.data.buffer));
+      } catch (e) { if (dev === t) lostConnection(e); return; }
+    }
+  })();
 }
 
-async function readLoop(d) {
-  while (dev === d) {
+async function openSerial(port) {   // Web Serial
+  await port.open({ baudRate: 115200, bufferSize: 4096 });
+  try { await port.setSignals({ dataTerminalReady: true, requestToSend: true }); } catch (e) {}
+  const writer = port.writable.getWriter();
+  let reader = null;
+  const t = {
+    kind: 'serial', port,
+    write: f => writer.write(f),
+    close: async () => {
+      try { if (reader) await reader.cancel(); } catch (e) {}
+      try { writer.releaseLock(); } catch (e) {}
+      try { await port.close(); } catch (e) {}
+    },
+  };
+  dev = t;
+  (async () => {
     try {
-      const r = await d.transferIn(epIn, 64);
-      if (r.data && r.data.byteLength) {
-        for (const b of new Uint8Array(r.data.buffer)) rxBuf.push(b);
-        parseRx();
+      reader = port.readable.getReader();
+      while (dev === t) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value && value.length) onBytes(value);
       }
-    } catch (e) {
-      if (dev === d) {
-        log(expectingReset ? 'La chiavetta si sta riavviando…' : 'Collegamento USB interrotto (' + e.message + ')');
-        onDisconnect();
-      }
-      return;
-    }
-  }
+    } catch (e) { if (dev === t) lostConnection(e); return; }
+    finally { try { reader && reader.releaseLock(); } catch (e) {} }
+    if (dev === t) lostConnection(new Error('porta chiusa'));
+  })();
+}
+
+function lostConnection(e) {
+  log(expectingReset ? 'La chiavetta si sta riavviando…' : 'Collegamento interrotto (' + e.message + ')');
+  onDisconnect();
 }
 function parseRx() {
   for (;;) {
@@ -459,8 +488,8 @@ function parseRx() {
 }
 function send(layer, type, data = []) {
   const frame = encodeFrame(layer, type, data);
-  const d = dev;
-  txQueue = txQueue.then(() => d ? d.transferOut(epOut, frame) : null).catch(e => log('Errore invio: ' + e.message));
+  const t = dev;
+  txQueue = txQueue.then(() => t ? t.write(frame) : null).catch(e => log('Errore invio: ' + e.message));
   return txQueue;
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1444,7 +1473,9 @@ let wakeLock = null;
 async function keepScreenOn() { try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
 
 function onDisconnect() {
-  dev = null; lights.clear(); selected.clear(); cancelWaiters();
+  const old = dev;
+  dev = null;
+  if (old) Promise.resolve().then(() => old.close()).catch(() => {}); lights.clear(); selected.clear(); cancelWaiters();
   selecting = false; if (drill) drill.stop = true; if (sprint) sprint.stop = true; if (beep) beep.stop = true; if (simon) simon.stop = true;
   setStatus(expectingReset ? 'Riavvio chiavetta…' : 'Chiavetta scollegata'); render();
   autoReconnect();
@@ -1452,13 +1483,13 @@ function onDisconnect() {
 /* Dopo un riavvio la chiavetta ricompare: riprova ad aprirla per 15 secondi */
 let reconnecting = false;
 async function autoReconnect() {
-  if (reconnecting || !navigator.usb) return;
+  if (reconnecting || !(navigator.usb || navigator.serial)) return;
   reconnecting = true;
   for (let i = 0; i < 50 && !dev; i++) {
     await sleep(300);
     if (dev) break;
     try {
-      const d = (await navigator.usb.getDevices()).find(x => x.vendorId === VID);
+      const d = await findKnownDongle();
       if (d && !dev) { await connectFlow(d); }
     } catch (e) {}
   }
@@ -1658,42 +1689,62 @@ function render() {
   $('log').textContent = logLines.join('\n');
 }
 
+async function findKnownDongle() {
+  if (USE_SERIAL) return (await navigator.serial.getPorts()).find(p => p.getInfo().usbVendorId === VID) || null;
+  if (navigator.usb) return (await navigator.usb.getDevices()).find(x => x.vendorId === VID) || null;
+  return null;
+}
 async function connectFlow(d) {
   if (dev || connecting) return;
   connecting = true;
   try {
-    await openDevice(d);
+    if (USE_SERIAL) await openSerial(d); else await openDevice(d);
     expectingReset = false;
     setStatus('Chiavetta collegata');
-    log('Chiavetta collegata');
+    log('Chiavetta collegata' + (USE_SERIAL ? ' (porta seriale)' : ''));
     keepScreenOn();
     await initDongle();
   } catch (e) {
-    log('Errore apertura chiavetta: ' + e.message);
+    log('Errore apertura chiavetta: ' + e.message + (USE_SERIAL && /open|busy|access/i.test(e.message) ? ' – forse è aperta da un altro programma o da un\'altra scheda' : ''));
     setStatus('Errore: ' + e.message);
-    try { await d.close(); } catch (e2) {}
+    try { if (dev) await dev.close(); else if (USE_SERIAL) await d.close(); else await d.close(); } catch (e2) {}
     dev = null;
   } finally { connecting = false; }
 }
 let connecting = false;
 
-if (!navigator.usb) {
+if (!USE_SERIAL && !navigator.usb) {
   $('nousb').hidden = false; $('connectBox').hidden = true;
-  $('nousbMsg').textContent = window.isSecureContext
-    ? 'Questo browser non supporta WebUSB. Usa Chrome su Android.'
-    : 'La pagina non è aperta in modo sicuro. In Chrome apri chrome://flags, cerca "Insecure origins treated as secure", aggiungi ' + location.origin + ', attiva e riavvia Chrome.';
+  $('nousbMsg').textContent = !window.isSecureContext
+    ? 'La pagina non è aperta in modo sicuro (serve https).'
+    : IS_ANDROID ? 'Questo browser non supporta WebUSB: usa Chrome su Android.'
+                 : 'Questo browser non può collegarsi alla chiavetta: usa Google Chrome o Microsoft Edge.';
 } else {
   $('connect').onclick = async () => {
-    try { await connectFlow(await navigator.usb.requestDevice({ filters: [{ vendorId: VID, productId: PID }] })); }
-    catch (e) { if (e.name !== 'NotFoundError') log('Errore: ' + e.message); }
+    try {
+      const d = USE_SERIAL
+        ? await navigator.serial.requestPort({ filters: [{ usbVendorId: VID, usbProductId: PID }] })
+        : await navigator.usb.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
+      await connectFlow(d);
+    } catch (e) { if (e.name !== 'NotFoundError') log('Errore: ' + e.message); }
   };
-  navigator.usb.addEventListener('connect', e => {
-    if (e.device.vendorId === VID && !dev) { log('Chiavetta ricollegata'); connectFlow(e.device); }
-  });
-  navigator.usb.addEventListener('disconnect', e => {
-    if (dev && e.device === dev) { log('Chiavetta scollegata'); onDisconnect(); }
-  });
-  navigator.usb.getDevices().then(ds => { const d = ds.find(x => x.vendorId === VID); if (d) connectFlow(d); });
+  if (USE_SERIAL) {
+    navigator.serial.addEventListener('connect', e => {
+      const port = e.target;
+      if (!dev && port.getInfo && port.getInfo().usbVendorId === VID) { log('Chiavetta ricollegata'); connectFlow(port); }
+    });
+    navigator.serial.addEventListener('disconnect', e => {
+      if (dev && e.target === dev.port) { log(expectingReset ? 'La chiavetta si sta riavviando…' : 'Chiavetta scollegata'); onDisconnect(); }
+    });
+  } else {
+    navigator.usb.addEventListener('connect', e => {
+      if (e.device.vendorId === VID && !dev) { log('Chiavetta ricollegata'); connectFlow(e.device); }
+    });
+    navigator.usb.addEventListener('disconnect', e => {
+      if (dev && e.device === dev.d) { log('Chiavetta scollegata'); onDisconnect(); }
+    });
+  }
+  findKnownDongle().then(d => { if (d) connectFlow(d); }).catch(() => {});
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && dev) keepScreenOn(); });
 }
 render();
