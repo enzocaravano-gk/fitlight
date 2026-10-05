@@ -387,6 +387,9 @@ const N_MACFILT_DISABLE = 34, N_CONN_CHANGED = 49, N_GET_CONNECTIONS = 50, N_SET
 const A_TX = 65, A_RX = 66, A_TX_BC = 72;
 const OP_STATUS_REQUEST = 1, OP_STATUS_RESPONSE = 2, OP_TRIGGER_RESPONSE = 5, OP_ARM_AND_TRIGGER = 10;
 const OP_SUNFILTER = 6, OP_COLOR_SET = 0xA0, OP_KEEP_ALIVE = 0xA1, OP_LIMITATION = 0xC6;
+const OP_JOIN_REQUEST = 0xA2, N_TX_ERROR = 53, N_INVALIDATE_CONNECTION = 56, N_CONT_TX_ERROR = 57, N_SET_CONT_TX_ERR_TH = 58;
+const LIMITATION_PAYLOAD = [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const sendLimitation = idx => send(L_APP, A_TX, octopus(idx, OP_LIMITATION, LIMITATION_PAYLOAD, 1));
 const PAN_ID = 0x1234, CHANNEL = 25;
 
 const RGB = { off:[0,0,0], red:[255,0,0], green:[0,255,0], blue:[0,0,255], yellow:[255,255,0],
@@ -558,17 +561,39 @@ function onPacket(p) {
       lights.set(idx, { mac, macRaw, rssi: null, rxLqi: null, txLqi: null, batt: null, charging: false, fw: null, color: 'off' });
       selected.add(idx);
       const dt = netStart ? ` dopo ${((performance.now() - netStart) / 1000).toFixed(1)} s` : '';
-      log(`Luce ${idx + 1} collegata${dt} (${mac.slice(-6)})`);
+      sendLimitation(idx);   // subito, come l'app originale: la luce completa l'aggancio
+      const pan = (p.data[2] << 8) | p.data[3];   // diagnostica: rete della luce
+      const panOk = pan === PAN_ID || pan === ((PAN_ID & 255) << 8 | PAN_ID >> 8);
+      log(`Luce ${idx + 1} collegata${dt} (${mac.slice(-6)}${panOk ? '' : ', PAN ' + pan.toString(16)})`);
       welcome(idx);
     } else if (!valid && lights.has(idx)) {
       lights.delete(idx); selected.delete(idx); log(`Luce ${idx + 1} scollegata`);
     }
     render(); return;
   }
+  // La chiavetta segnala una luce che non risponde più: libera il posto così può ricollegarsi subito
+  if (p.layer === L_NET && p.type === N_CONT_TX_ERROR && p.data.length >= 1) {
+    const idx = p.data[0];
+    send(L_NET, N_INVALIDATE_CONNECTION, [idx]);
+    if (lights.has(idx)) { lights.delete(idx); selected.delete(idx); log(`Luce ${idx + 1} non risponde: scollegata`); render(); }
+    return;
+  }
+  // errore di invio: [id(2), luce, dispositivo, operazione, livello]
+  if (p.layer === L_NET && p.type === N_TX_ERROR && p.data.length >= 6 && p.data[4] === OP_KEEP_ALIVE) {
+    const l = lights.get(p.data[2]);   // keep-alive perso: rimandalo subito (come l'app originale)
+    if (l) send(L_APP, A_TX_BC, octopus(p.data[2], OP_KEEP_ALIVE, l.macRaw, 1));
+    return;
+  }
   if (p.layer === L_APP && p.type === A_RX) {
     const tRx = performance.now();
     const d = p.data, n = d[5], o = d.slice(6, 6 + n);
     const op = o[0], idx = o[1], pl = o.slice(4, 4 + o[3]);
+    if (op === OP_JOIN_REQUEST) {   // la luce chiede di entrare: rispondi subito
+      if (lightsOff) { send(L_APP, A_TX_BC, octopus(idx, OP_JOIN_DENIED)); return; }
+      sendLimitation(idx);
+      if (!lights.has(idx)) { send(L_NET, N_GET_CONNECTIONS); lastPoll = Date.now(); }
+      return;
+    }
     const l = lights.get(idx);
     if (l && d.length >= 8 + n) { l.rssi = d[6 + n]; l.rxLqi = d[7 + n]; }
     if (l && op === OP_STATUS_RESPONSE && pl.length >= 8) {
@@ -598,6 +623,7 @@ async function getMode() {
   return null;
 }
 
+let freshBoot = false;   // chiavetta appena uscita dal bootloader: non ha luci collegate
 async function initDongle() {
   if (initializing) return;
   initializing = true;
@@ -606,20 +632,21 @@ async function initDongle() {
     if (mode === 0) {
       log('Chiavetta in bootloader: avvio applicazione…');
       setStatus('Avvio chiavetta…');
-      expectingReset = true;
+      expectingReset = true; freshBoot = true;
       await send(L_DONGLE, D_EXIT_BL);
       await sleep(1500);
       if (dev) { const m2 = await getMode(); if (m2 === 1) await startNetwork(); }
     } else if (mode === 1) {
       // Chiavetta già avviata: se ha già luci collegate non rifare la rete (le scollegherebbe)
       send(L_NET, N_GET_CONNECTIONS);
-      await sleep(700);
+      await sleep(freshBoot ? 0 : 500);
       if (lights.size) {
         netStart = performance.now();
         log(`Rete già attiva: ${lights.size} luc${lights.size === 1 ? 'e' : 'i'} ancora collegate`);
       } else {
         await startNetwork();
       }
+      freshBoot = false;
     } else {
       log('La chiavetta non risponde'); setStatus('La chiavetta non risponde');
     }
@@ -661,17 +688,16 @@ async function startNetwork() {
   await send(L_DONGLE, D_SET_MODE, [1]);
   await sleep(500);
   await send(L_DONGLE, D_RF_SET_CHANNEL, [CHANNEL, 9]);
+  await send(L_NET, N_SET_CONT_TX_ERR_TH, [5]);
   netStart = performance.now();
   log('Rete radio attiva: togli le luci dal caricatore');
   setStatus('Pronta - togli le luci dal caricatore');
 }
 
 async function welcome(idx) {
-  await sleep(300);
-  send(L_APP, A_TX, octopus(idx, OP_LIMITATION, [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1));
-  await sleep(300);
+  await sleep(150);
   send(L_APP, A_TX, octopus(idx, OP_STATUS_REQUEST));
-  await sleep(200);
+  await sleep(150);
   sendSunFilter(idx, sunLevel);
   await flash(idx);
 }
@@ -1645,7 +1671,8 @@ async function exportPdf(ses, share) {
 setInterval(() => {
   if (!dev || initializing) return;
   const now = Date.now();
-  const pollEvery = lights.size ? 4000 : 2000;   // senza luci controlla più spesso
+  const searching = netStart && performance.now() - netStart < 30000;
+  const pollEvery = searching ? 1000 : lights.size ? 4000 : 2000;   // all'avvio e senza luci controlla più spesso
   if (now - lastPoll > pollEvery) { send(L_NET, N_GET_CONNECTIONS); lastPoll = now; }
   const ids = [...lights.keys()].sort((a, b) => a - b);
   if (ids.length) {
