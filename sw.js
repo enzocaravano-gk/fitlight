@@ -1,5 +1,5 @@
 // Salva l'app sul telefono per usarla senza internet. Cambia VERSION a ogni aggiornamento.
-const VERSION = 'fitlight-v14';
+const VERSION = 'fitlight-v15';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',

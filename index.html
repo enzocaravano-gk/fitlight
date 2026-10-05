@@ -390,7 +390,12 @@ const OP_SUNFILTER = 6, OP_COLOR_SET = 0xA0, OP_KEEP_ALIVE = 0xA1, OP_LIMITATION
 const OP_JOIN_REQUEST = 0xA2, N_TX_ERROR = 53, N_INVALIDATE_CONNECTION = 56, N_CONT_TX_ERROR = 57, N_SET_CONT_TX_ERR_TH = 58;
 const LIMITATION_PAYLOAD = [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const sendLimitation = idx => send(L_APP, A_TX, octopus(idx, OP_LIMITATION, LIMITATION_PAYLOAD, 1));
-const PAN_ID = 0x1234, CHANNEL = 25;
+const CHANNEL = 25;
+/* Rete (PAN) usata dalla chiavetta, nei 2 byte come li invia SET_PAN. Le luci ricordano la rete del vecchio tablet
+   e la cercano a lungo prima di accettarne un'altra: l'app la impara dalla prima luce e la usa dall'avvio successivo. */
+let panBytes = [0x34, 0x12];
+try { const v = JSON.parse(localStorage.getItem('fitlight_pan') || 'null'); if (Array.isArray(v) && v.length === 2) panBytes = v; } catch (e) {}
+const panHex = b => b.map(x => x.toString(16).padStart(2, '0')).join('');
 
 const RGB = { off:[0,0,0], red:[255,0,0], green:[0,255,0], blue:[0,0,255], yellow:[255,255,0],
               cyan:[0,255,255], magenta:[255,0,255], white:[255,255,255] };
@@ -562,9 +567,10 @@ function onPacket(p) {
       selected.add(idx);
       const dt = netStart ? ` dopo ${((performance.now() - netStart) / 1000).toFixed(1)} s` : '';
       sendLimitation(idx);   // subito, come l'app originale: la luce completa l'aggancio
-      const pan = (p.data[2] << 8) | p.data[3];   // diagnostica: rete della luce
-      const panOk = pan === PAN_ID || pan === ((PAN_ID & 255) << 8 | PAN_ID >> 8);
-      log(`Luce ${idx + 1} collegata${dt} (${mac.slice(-6)}${panOk ? '' : ', PAN ' + pan.toString(16)})`);
+      const lightPan = [p.data[2], p.data[3]];   // rete memorizzata nella luce
+      const panOk = lightPan[0] === panBytes[0] && lightPan[1] === panBytes[1];
+      log(`Luce ${idx + 1} collegata${dt} (${mac.slice(-6)}${panOk ? '' : ', PAN ' + panHex(lightPan)})`);
+      if (!panOk && (lightPan[0] || lightPan[1]) && !(lightPan[0] === 255 && lightPan[1] === 255)) learnPan(lightPan);
       welcome(idx);
     } else if (!valid && lights.has(idx)) {
       lights.delete(idx); selected.delete(idx); log(`Luce ${idx + 1} scollegata`);
@@ -684,7 +690,7 @@ async function wakeLights() {
 async function startNetwork() {
   lightsOff = false;
   await send(L_NET, N_MACFILT_DISABLE);
-  await send(L_NET, N_SET_PAN, [PAN_ID & 255, PAN_ID >> 8]);
+  await send(L_NET, N_SET_PAN, panBytes);
   await send(L_DONGLE, D_SET_MODE, [1]);
   await sleep(500);
   await send(L_DONGLE, D_RF_SET_CHANNEL, [CHANNEL, 9]);
@@ -694,6 +700,14 @@ async function startNetwork() {
   setStatus('Pronta - togli le luci dal caricatore');
 }
 
+let panLearned = false;
+function learnPan(b) {
+  let saved = null;
+  try { saved = localStorage.getItem('fitlight_pan'); localStorage.setItem('fitlight_pan', JSON.stringify(b)); } catch (e) {}
+  if (panLearned || saved === JSON.stringify(b)) return;
+  panLearned = true;
+  log(`Le luci cercano la rete ${panHex(b)} (quella del vecchio tablet): dal prossimo avvio l'app userà la stessa rete e le luci si agganceranno più in fretta.`);
+}
 async function welcome(idx) {
   await sleep(150);
   send(L_APP, A_TX, octopus(idx, OP_STATUS_REQUEST));
