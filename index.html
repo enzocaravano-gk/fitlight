@@ -124,10 +124,8 @@
       <button id="selTouch">Scegli toccando</button>
     </div>
     <p class="hint" id="selHint">Le luci spuntate sono quelle usate negli esercizi.</p>
-    <div class="row" style="margin-top:12px">
-      <button id="powerOff" style="flex:1">⏻ Spegni luci</button>
-    </div>
-    <p class="hint" id="powerHint" hidden></p>
+    <p class="hint">Le luci non si possono spegnere a distanza (nemmeno con l'app originale): restano accese finché
+      sono fuori dalla valigetta. Per non scaricarle riponile nella valigetta di ricarica collegata alla corrente.</p>
   </section>
 
   <div class="tabs">
@@ -553,10 +551,6 @@ function onPacket(p) {
   if (p.layer === L_DONGLE && p.type === D_MODE) { if (modeWaiter) modeWaiter(p.data[0]); return; }
   if (p.layer === L_NET && p.type === N_CONN_CHANGED && p.data.length === 14) {
     const idx = p.data[0], valid = (p.data[1] & 0x80) !== 0;
-    if (valid && lightsOff) {   // luci spente: respingi chi prova a ricollegarsi
-      send(L_APP, A_TX_BC, octopus(idx, OP_JOIN_DENIED));
-      return;
-    }
     if (valid && !lights.has(idx)) {
       const macRaw = p.data.slice(6, 14);
       const mac = macRaw.slice().reverse().map(x => x.toString(16).padStart(2, '0')).join('').toUpperCase();
@@ -589,7 +583,6 @@ function onPacket(p) {
     const d = p.data, n = d[5], o = d.slice(6, 6 + n);
     const op = o[0], idx = o[1], pl = o.slice(4, 4 + o[3]);
     if (op === OP_JOIN_REQUEST) {   // la luce chiede di entrare: rispondi subito
-      if (lightsOff) { send(L_APP, A_TX_BC, octopus(idx, OP_JOIN_DENIED)); return; }
       sendLimitation(idx);
       if (!lights.has(idx)) { send(L_NET, N_GET_CONNECTIONS); lastPoll = Date.now(); }
       return;
@@ -653,36 +646,7 @@ async function initDongle() {
   } finally { initializing = false; }
 }
 
-/* ---------- Spegnimento luci (come l'app originale: "accesso negato" + filtro sulla chiavetta) ---------- */
-let lightsOff = false;
-async function powerOffLights() {
-  if (busy()) return;
-  const ids = [...lights.keys()];
-  log(`Spengo ${ids.length} luc${ids.length === 1 ? 'e' : 'i'}…`);
-  for (const i of ids) setColor(i, 'off');
-  await sleep(200);
-  for (let k = 0; k < 3; k++) {   // ripetuto 3 volte come l'app originale
-    for (const i of ids) { send(L_APP, A_TX_BC, octopus(i, OP_JOIN_DENIED)); send(L_APP, A_TX, octopus(i, OP_JOIN_DENIED)); }
-    await sleep(300);
-  }
-  lightsOff = true;
-  await send(L_NET, N_MACFILT_CLEAR);     // filtro vuoto e attivo: nessuna luce può ricollegarsi
-  await send(L_NET, N_MACFILT_ENABLE);
-  await send(L_NET, N_CLEAR_CONNECTIONS);
-  lights.clear(); selected.clear();
-  log('Luci spente: scollegate dalla chiavetta. Per usarle di nuovo premi "Riattiva luci".');
-  setStatus('Luci spente');
-}
-async function wakeLights() {
-  lightsOff = false;
-  await send(L_NET, N_MACFILT_DISABLE);
-  netStart = performance.now();
-  log('Luci riattivabili: togli e rimetti le luci sul caricatore (o muovile) per ricollegarle.');
-  setStatus('Pronta - riattiva le luci');
-}
-
 async function startNetwork() {
-  lightsOff = false;
   await send(L_NET, N_MACFILT_DISABLE);
   await send(L_NET, N_SET_PAN, panBytes);
   await send(L_DONGLE, D_SET_MODE, [1]);
@@ -1684,7 +1648,7 @@ setInterval(() => {
       send(L_APP, A_TX, octopus(ids[stIndex++ % ids.length], OP_STATUS_REQUEST));
     }
   }
-  if (lights.size && !lightsOff) setStatus(`Collegata - ${lights.size} luc${lights.size === 1 ? 'e' : 'i'}`);
+  if (lights.size) setStatus(`Collegata - ${lights.size} luc${lights.size === 1 ? 'e' : 'i'}`);
 }, 600);
 
 let wakeLock = null;
@@ -1758,10 +1722,6 @@ document.querySelectorAll('[data-save]').forEach(el => {
 $('stop').onclick = stopDrill;
 $('selAll').onclick = () => { if (!busy()) { for (const i of lights.keys()) selected.add(i); render(); } };
 $('selNone').onclick = () => { if (!busy()) { selected.clear(); render(); } };
-$('powerOff').onclick = () => {
-  if (lightsOff) { wakeLights(); render(); return; }
-  if (confirm('Spegnere le luci? Si scollegano dalla chiavetta per non scaricarsi.')) powerOffLights().then(render);
-};
 $('selTouch').onclick = () => { if (selecting) endSelectByTouch(); else selectByTouch(); };
 $('spGo').onclick = () => { if (!busy()) runSprint(); };
 $('spCancel').onclick = () => { if (sprint) { sprint.stop = true; cancelWaiters(); log('Sprint annullato'); } };
@@ -1917,11 +1877,6 @@ function render() {
   $('selTouch').classList.toggle('primary', selecting);
   $('selTouch').disabled = !lights.size || !!drill || !!sprint;
   $('selAll').disabled = $('selNone').disabled = busy();
-  $('powerOff').textContent = lightsOff ? '⏻ Riattiva luci' : '⏻ Spegni luci';
-  $('powerOff').classList.toggle('primary', lightsOff);
-  $('powerOff').disabled = !dev || busy() || (!lightsOff && !lights.size);
-  $('powerHint').hidden = !lightsOff;
-  $('powerHint').textContent = 'Luci spente: non si ricollegano finché non premi "Riattiva luci".';
   $('selHint').textContent = selecting ? 'Passa la mano sulle luci: verde = scelta, blu = non scelta.'
     : `Usate negli esercizi: ${activeLights().length} di ${lights.size}.`;
 
